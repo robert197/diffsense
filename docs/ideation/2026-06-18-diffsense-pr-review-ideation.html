@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation: diffsense — AI-Assisted PR Review</title>
+<link rel="stylesheet" href="https://fonts.bunny.net/css?family=inter:400,500,600,700|jetbrains-mono:400,500">
+<style>
+  :root{
+    --bg:#fbfaf8; --surface:#ffffff; --ink:#1c1b22; --muted:#5f5d6b;
+    --line:#e7e4de; --accent:#5b54e6; --accent-soft:#efeefb; --accent-text:#3d37b8;
+    --warn:#c2410c; --warn-soft:#fdf0e9; --warn-text:#9a3412;
+    --good:#0f766e; --good-soft:#e7f3f1; --good-text:#0c5b54;
+    --risk:#b4234a; --risk-soft:#fbe9ee;
+    --radius:12px;
+    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#16151b; --surface:#1f1e26; --ink:#ecebf2; --muted:#a3a1b0;
+      --line:#312f3a; --accent:#8e88ff; --accent-soft:#262446; --accent-text:#b9b4ff;
+      --warn:#fb923c; --warn-soft:#33231a; --warn-text:#fdba74;
+      --good:#5eead4; --good-soft:#16302c; --good-text:#7ff0de;
+      --risk:#ff6b8f; --risk-soft:#321922;
+    }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:var(--sans); font-size:16px; line-height:1.6;
+    font-feature-settings:"cv05","ss01"; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:940px; margin-inline:auto; padding:56px 24px 96px}
+  header.doc{border-bottom:1px solid var(--line); padding-bottom:28px; margin-bottom:36px}
+  .eyebrow{font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--accent-text); font-weight:600}
+  h1{font-size:38px; line-height:1.12; margin:.3em 0 .35em; letter-spacing:-.02em; font-weight:700}
+  h1 .name{color:var(--accent)}
+  .lede{font-size:17px; color:var(--muted); max-width:70ch; margin:0}
+  .meta{display:flex; flex-wrap:wrap; gap:8px; margin-top:22px}
+  .meta .pill{font-size:12.5px; padding:4px 11px; border:1px solid var(--line); border-radius:999px; background:var(--surface); color:var(--muted)}
+  .meta .pill b{color:var(--ink); font-weight:600}
+  .stats{display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin:34px 0 8px}
+  .stat{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:16px 18px}
+  .stat .n{font-size:27px; font-weight:700; letter-spacing:-.02em}
+  .stat .l{font-size:12.5px; color:var(--muted); margin-top:2px}
+  @media (max-width:680px){.stats{grid-template-columns:repeat(2,1fr)}}
+  h2{font-size:14px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); font-weight:600; margin:52px 0 18px; padding-bottom:9px; border-bottom:1px solid var(--line)}
+  p{max-width:70ch}
+  .ground p{margin:0 0 14px}
+  .ground strong{color:inherit}
+  .axes{list-style:none; padding:0; margin:0; display:grid; gap:10px}
+  .axes li{background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:13px 16px; display:flex; gap:13px; align-items:baseline}
+  .axes .tag{font-family:var(--mono); font-size:12px; font-weight:600; color:var(--accent-text); background:var(--accent-soft); padding:2px 8px; border-radius:6px; flex:none}
+  .axes .ax-d{color:var(--muted); font-size:14.5px}
+  .axes .ax-d b{color:var(--ink); font-weight:600}
+  .jump{margin:0 0 30px; padding:0; list-style:none; display:grid; gap:7px; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:18px 20px}
+  .jump .jh{font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); font-weight:600; margin-bottom:4px}
+  .jump a{color:var(--ink); text-decoration:none; font-size:15px; display:flex; gap:10px; align-items:baseline}
+  .jump a:hover{color:var(--accent)}
+  .jump .rk{font-family:var(--mono); font-size:12px; color:var(--accent-text); flex:none; width:18px}
+  .jump .jx{margin-left:auto; font-family:var(--mono); font-size:11.5px; color:var(--muted)}
+  article.idea{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:26px 28px; margin-bottom:22px; scroll-margin-top:18px}
+  .idea-head{display:flex; gap:14px; align-items:baseline; flex-wrap:wrap}
+  .idea-head .rid{font-family:var(--mono); font-weight:600; color:var(--accent); font-size:15px}
+  .idea-head h3{font-size:22px; margin:0; letter-spacing:-.01em; font-weight:700; flex:1 1 60%}
+  .chips{display:flex; gap:7px; flex-wrap:wrap; margin:14px 0 18px}
+  .chip{font-size:12px; padding:3px 10px; border-radius:999px; border:1px solid var(--line); background:var(--bg); color:var(--muted); font-weight:500}
+  .chip.ax{background:var(--accent-soft); color:var(--accent-text); border-color:transparent; font-family:var(--mono)}
+  .chip.cf b,.chip.cx b{color:var(--ink); font-weight:600}
+  .idea p{margin:0 0 14px}
+  .field{margin:0 0 14px}
+  .field .fl{font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); font-weight:600; margin-bottom:3px}
+  .basis{font-family:var(--mono); font-size:13.5px; background:var(--bg); border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:7px; padding:11px 14px; color:var(--ink); max-width:none}
+  .basis .bt{color:var(--accent-text); font-weight:600}
+  .down{background:var(--warn-soft); border-radius:8px; padding:12px 15px; color:var(--warn-text); font-size:14.5px; max-width:none}
+  .down .fl{color:var(--warn)}
+  figure{margin:6px 0 20px; background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:16px}
+  figure svg{display:block; width:100%; height:auto}
+  figcaption{font-size:12.5px; color:var(--muted); margin-top:9px; text-align:center}
+  table{border-collapse:collapse; width:100%; font-size:14.5px; margin-top:4px}
+  th,td{text-align:left; padding:10px 13px; border-bottom:1px solid var(--line); vertical-align:top}
+  th{font-size:11.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); font-weight:600}
+  td .rj{font-family:var(--mono); font-size:12px; color:var(--muted)}
+  td b{font-weight:600}
+  .swing{background:var(--accent-soft); border-radius:10px; padding:16px 20px; margin-top:18px}
+  .swing .fl{font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-text); font-weight:600; margin-bottom:5px}
+  .swing p{margin:0; color:var(--ink); font-size:14.5px; max-width:none}
+  footer.composition-signal{margin-top:60px; padding-top:20px; border-top:1px solid var(--line); font-size:12.5px; color:var(--muted)}
+  footer code{font-family:var(--mono); font-size:12px}
+  .svg-lbl{font-family:var(--sans); font-size:12px; fill:var(--ink)}
+  .svg-mut{font-family:var(--sans); font-size:11px; fill:var(--muted)}
+  .svg-mono{font-family:var(--mono); font-size:11px; fill:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <div class="eyebrow">Ideation · Discovery Artifact</div>
+  <h1><span class="name">diffsense</span> — reviewing AI code at AI speed</h1>
+  <p class="lede">Seven ranked directions for a card-based, AI-assisted PR review tool built for the new bottleneck: not writing code, but reviewing the mountains of it that agents now produce. The set is chosen to be fast and playful without becoming a rubber-stamp machine.</p>
+  <div class="meta">
+    <span class="pill"><b>Date</b> 2026-06-18</span>
+    <span class="pill"><b>Topic</b> diffsense-pr-review</span>
+    <span class="pill"><b>Focus</b> Tinder-style per-chunk review of large AI PRs</span>
+    <span class="pill"><b>Mode</b> elsewhere-software</span>
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="n">37</div><div class="l">raw candidates generated</div></div>
+    <div class="stat"><div class="n">7</div><div class="l">survivors after critique</div></div>
+    <div class="stat"><div class="n">5</div><div class="l">topic axes covered</div></div>
+    <div class="stat"><div class="n">0</div><div class="l">competitors with this UX</div></div>
+  </div>
+</header>
+
+<section class="ground">
+  <h2>Topic Context</h2>
+  <p><strong>The bottleneck is real and measured.</strong> On high-AI-adoption teams, PR size is up 154% and review time up 91%, yet company-level delivery metrics stay flat — the gain from faster generation is eaten by slower review (Faros AI). Defect detection collapses with size: 87% of defects caught in PRs under 100 lines, 28% at 1,000+ lines; an XL PR gets ~1.8 comments in 4.2 hours of "review" (Propel Code). And 61% of AI-generated PRs receive <em>zero</em> recorded review activity — rubber-stamping by omission (arXiv 2605.02273).</p>
+  <p><strong>The whitespace is the reviewer's UI.</strong> Every major tool — CodeRabbit, Greptile, Graphite Agent, Qodo, GitHub Copilot review, Korbit, Cursor BugBot — ships the same two-layer paradigm: a top-level AI summary plus inline comments on diff lines. None use a card/triage queue with per-chunk disposition. CodeRabbit's "Atlas" (2025) is the closest: change-cohorts, layer navigation, J/K keys, rendered diagrams — but it has no per-chunk risk score, no swipe disposition, no reviewer-driven chunk splitting, and no global score. Graphite owns the PR <em>author</em> workflow; nobody owns the PR <em>reviewer</em> workflow with a purpose-built UI. That is the wedge.</p>
+  <p><strong>Two landmines the design must dodge.</strong> First, swipe fatigue: Tinder/Avec-style swiping works for low-stakes, recoverable decisions; a rubber-stamped production bug is neither, so the gesture model has to encode that asymmetry. Second, opaque scoring: in security triage (Snyk, Apiiro) engineers <em>disengage</em> from a single number they can't interrogate — multi-factor scores that show their breakdown are trusted; bare scalars are ignored. The strongest analogy across the research is the radiology reading queue: a worklist of studies, each with an AI pre-read and a priority flag, signed off one at a time — AI triage as attention-direction, not judgment-replacement.</p>
+  <p><strong>Feasibility.</strong> Logical-chunk decomposition is tractable via AST / call-graph / import-graph cohorting (SemanticDiff already groups renames into one card and detects moved code); the hard part is the "reviewable unit" heuristic — too fine yields hundreds of trivial cards, too coarse collapses back to monolithic file review. Structural signals (lines added/deleted, files, entropy) predict review effort at AUC 0.96 <em>at PR creation time</em>, before a human opens anything — a strong, cheap basis for ordering and gating.</p>
+</section>
+
+<section>
+  <h2>Topic Axes</h2>
+  <ul class="axes">
+    <li><span class="tag">A1</span><span class="ax-d"><b>Chunk decomposition &amp; splitting</b> — turning a diff into reviewable logical units; split / merge.</span></li>
+    <li><span class="tag">A2</span><span class="ax-d"><b>Triage interaction</b> — the card / swipe / keyboard UX, disposition tracking, anti-rubber-stamp safeguards.</span></li>
+    <li><span class="tag">A3</span><span class="ax-d"><b>AI explanation &amp; rating quality</b> — what the AI says per chunk and how trustworthy / interrogable it is.</span></li>
+    <li><span class="tag">A4</span><span class="ax-d"><b>Scoring &amp; risk aggregation</b> — per-chunk score → global PR score; calibration, interrogability.</span></li>
+    <li><span class="tag">A5</span><span class="ax-d"><b>Big-PR scale &amp; reviewer workflow</b> — ordering, prevention, collaboration, GitHub sync, merge-back.</span></li>
+  </ul>
+</section>
+
+<section>
+  <h2>Ranked Ideas</h2>
+  <ul class="jump">
+    <div class="jh">Jump to</div>
+    <li><a href="#i1"><span class="rk">1</span> Risk-Ranked Queue with an Attention Budget <span class="jx">A5 · Conf 85</span></a></li>
+    <li><a href="#i2"><span class="rk">2</span> Intent as the Unit of Review <span class="jx">A1 · Conf 80</span></a></li>
+    <li><a href="#i3"><span class="rk">3</span> Disposition-by-Defense (variable-friction swipe) <span class="jx">A2 · Conf 85</span></a></li>
+    <li><a href="#i4"><span class="rk">4</span> A Risk Portfolio, Not a Number <span class="jx">A4 · Conf 85</span></a></li>
+    <li><a href="#i5"><span class="rk">5</span> Falsifiable AI Claims, One-Tap Refutable <span class="jx">A3 · Conf 75</span></a></li>
+    <li><a href="#i6"><span class="rk">6</span> Reviewability Gate (PR Admissions Control) <span class="jx">A5 · Conf 70</span></a></li>
+    <li><a href="#i7"><span class="rk">7</span> Chunk Fingerprint Registry <span class="jx">A4 · Conf 70</span></a></li>
+  </ul>
+
+  <!-- IDEA 1 -->
+  <article class="idea" id="i1">
+    <div class="idea-head"><span class="rid">1.</span><h3>Risk-Ranked Queue with an Attention Budget</h3></div>
+    <div class="chips"><span class="chip ax">A5 · scale &amp; workflow</span><span class="chip cf"><b>Confidence</b> 85%</span><span class="chip cx"><b>Complexity</b> Medium</span></div>
+    <p>Stop presenting chunks in file order. At PR load, order the deck by predicted risk using creation-time structural signals (lines ±, files touched, API-boundary crossing, test-coverage delta), riskiest first while attention is freshest. The reviewer sets an explicit <em>attention budget</em> — "20 minutes" or "15 cards." When it's spent, the remaining low-risk tail isn't silently skipped: it collapses into one honest, logged <em>"sampled-accept"</em> card the reviewer confirms with eyes open. This is the spine the other six ideas plug into — the radiology worklist made literal.</p>
+    <figure>
+      <svg viewBox="0 0 760 220" role="img" aria-label="File-order review spreads attention evenly and runs out before the risky chunks; risk-ordered review front-loads danger and caps the safe tail.">
+        <text x="14" y="22" class="svg-lbl" font-weight="600">File order (today)</text>
+        <text x="14" y="128" class="svg-lbl" font-weight="600">Risk order + budget (diffsense)</text>
+        <!-- top row: file order -->
+        <g>
+          <rect x="14" y="34" width="60" height="34" rx="6" fill="var(--good-soft)" stroke="var(--line)"/>
+          <rect x="80" y="34" width="60" height="34" rx="6" fill="var(--good-soft)" stroke="var(--line)"/>
+          <rect x="146" y="34" width="60" height="34" rx="6" fill="var(--accent-soft)" stroke="var(--line)"/>
+          <rect x="212" y="34" width="60" height="34" rx="6" fill="var(--good-soft)" stroke="var(--line)"/>
+          <rect x="278" y="34" width="60" height="34" rx="6" fill="var(--risk-soft)" stroke="var(--risk)"/>
+          <rect x="344" y="34" width="60" height="34" rx="6" fill="var(--good-soft)" stroke="var(--line)"/>
+          <rect x="410" y="34" width="60" height="34" rx="6" fill="var(--risk-soft)" stroke="var(--risk)"/>
+          <rect x="476" y="34" width="60" height="34" rx="6" fill="var(--good-soft)" stroke="var(--line)"/>
+          <line x1="455" y1="26" x2="455" y2="76" stroke="var(--warn)" stroke-width="2" stroke-dasharray="4 3"/>
+          <text x="462" y="20" class="svg-mut" fill="var(--warn)">attention runs out here</text>
+          <text x="300" y="55" class="svg-mono" fill="var(--risk)">!</text>
+          <text x="432" y="55" class="svg-mono" fill="var(--risk)">!</text>
+          <text x="548" y="55" class="svg-mut">risky chunks reached late, skimmed</text>
+        </g>
+        <!-- bottom row: risk order -->
+        <g>
+          <rect x="14" y="140" width="60" height="34" rx="6" fill="var(--risk-soft)" stroke="var(--risk)"/>
+          <rect x="80" y="140" width="60" height="34" rx="6" fill="var(--risk-soft)" stroke="var(--risk)"/>
+          <rect x="146" y="140" width="60" height="34" rx="6" fill="var(--accent-soft)" stroke="var(--line)"/>
+          <rect x="212" y="140" width="60" height="34" rx="6" fill="var(--accent-soft)" stroke="var(--line)"/>
+          <text x="38" y="161" class="svg-mono" fill="var(--risk)">!</text>
+          <text x="104" y="161" class="svg-mono" fill="var(--risk)">!</text>
+          <line x1="288" y1="132" x2="288" y2="182" stroke="var(--warn)" stroke-width="2" stroke-dasharray="4 3"/>
+          <rect x="300" y="140" width="300" height="34" rx="6" fill="var(--bg)" stroke="var(--line)" stroke-dasharray="5 4"/>
+          <text x="450" y="161" class="svg-mut" text-anchor="middle">safe tail → one "sampled-accept" card</text>
+        </g>
+      </svg>
+      <figcaption>Front-load the danger; cap the boring tail with an explicit, audited accept — never a silent skip.</figcaption>
+    </figure>
+    <div class="field"><div class="fl">Basis</div><div class="basis"><span class="bt">external:</span> arXiv 2601.00753 — structural signals predict review effort at AUC 0.96 at PR creation (semantic/CodeBERT only 0.52); radiology reading-queue model (AI-positive studies promoted, hardest cases seen first); Propel Code — XL PRs get 1.8 comments because late-queue items get skimmed.</div></div>
+    <p class="field"><span class="fl" style="display:block;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:3px">Why it matters</span>It converts the XL-PR problem from "too much to read" into "spend your real attention on the right 15%." It's also buildable on day one with <em>only</em> structural signals — no AI explanation needed to validate the ordering — so it de-risks the whole product.</p>
+    <div class="down"><div class="fl" style="font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;margin-bottom:3px">Downsides</div>Risk ranking that's wrong erodes trust fast — a "safe" chunk that ships a bug is worse than a missed one in a flat list. The auto-collapsed tail is where liability lives; the sampled-accept needs a crisp audit trail and an easy "expand it all" escape hatch.</div>
+  </article>
+
+  <!-- IDEA 2 -->
+  <article class="idea" id="i2">
+    <div class="idea-head"><span class="rid">2.</span><h3>Intent as the Unit of Review</h3></div>
+    <div class="chips"><span class="chip ax">A1 · decomposition</span><span class="chip cf"><b>Confidence</b> 80%</span><span class="chip cx"><b>Complexity</b> Medium-High</span></div>
+    <p>The "PR" is an arbitrary packaging boundary — usually just whatever an agent did in one run. The semantically meaningful unit is the <em>intent</em> ("add rate limiting to the API"). Group cards under declared intents, and — most valuably — flag every diff region that maps to <em>no</em> declared intent as <strong>scope creep</strong>. Unrequested, drive-by changes are the single highest-risk content in agent PRs, and they're exactly what a line-by-line reviewer skims past. This also gives the global score a natural decomposition (coverage per intent) instead of a line-weighted average, and it makes the "reviewable unit" heuristic tractable by anchoring chunks to a known target rather than inferring boundaries from AST alone.</p>
+    <figure>
+      <svg viewBox="0 0 760 210" role="img" aria-label="Diff hunks group under declared intents; hunks matching no intent are flagged as scope creep.">
+        <text x="14" y="20" class="svg-mut">RAW DIFF HUNKS</text>
+        <g class="svg-mono">
+          <rect x="14" y="30" width="150" height="26" rx="5" fill="var(--bg)" stroke="var(--line)"/><text x="24" y="47">hunk a · ratelimit.ts</text>
+          <rect x="14" y="62" width="150" height="26" rx="5" fill="var(--bg)" stroke="var(--line)"/><text x="24" y="79">hunk b · middleware.ts</text>
+          <rect x="14" y="94" width="150" height="26" rx="5" fill="var(--bg)" stroke="var(--line)"/><text x="24" y="111">hunk c · config.ts</text>
+          <rect x="14" y="126" width="150" height="26" rx="5" fill="var(--risk-soft)" stroke="var(--risk)"/><text x="24" y="143" fill="var(--risk)">hunk d · auth.ts</text>
+          <rect x="14" y="158" width="150" height="26" rx="5" fill="var(--bg)" stroke="var(--line)"/><text x="24" y="175">hunk e · readme.md</text>
+        </g>
+        <!-- arrows -->
+        <g stroke="var(--muted)" stroke-width="1.4" fill="none">
+          <path d="M164 43 H300"/><path d="M164 75 H300"/><path d="M164 107 H300"/>
+          <path d="M164 171 H300"/>
+          <path d="M164 139 H300" stroke="var(--risk)" stroke-dasharray="4 3"/>
+        </g>
+        <!-- intents -->
+        <g>
+          <rect x="300" y="34" width="250" height="86" rx="9" fill="var(--accent-soft)" stroke="var(--accent)"/>
+          <text x="316" y="54" class="svg-lbl" font-weight="600" fill="var(--accent-text)">Intent: "rate-limit the API"</text>
+          <text x="316" y="74" class="svg-mut" fill="var(--accent-text)">hunks a, b, c — declared &amp; covered</text>
+          <text x="316" y="104" class="svg-mono" fill="var(--accent-text)">score: complete ✓</text>
+          <rect x="300" y="158" width="250" height="40" rx="9" fill="var(--accent-soft)" stroke="var(--accent)"/>
+          <text x="316" y="183" class="svg-lbl" fill="var(--accent-text)">Intent: "docs" — hunk e ✓</text>
+          <rect x="586" y="120" width="160" height="40" rx="9" fill="var(--risk-soft)" stroke="var(--risk)"/>
+          <text x="666" y="137" class="svg-lbl" fill="var(--risk)" text-anchor="middle" font-weight="600">SCOPE CREEP</text>
+          <text x="666" y="152" class="svg-mut" fill="var(--risk)" text-anchor="middle">hunk d touches auth —</text>
+          <path d="M450 139 H586" stroke="var(--risk)" stroke-width="1.4" fill="none" stroke-dasharray="4 3"/>
+          <text x="500" y="133" class="svg-mut" fill="var(--risk)" text-anchor="middle">nobody asked for this</text>
+        </g>
+      </svg>
+      <figcaption>Cards organize by what was <em>asked for</em>; anything matching no intent surfaces as the riskiest card in the PR.</figcaption>
+    </figure>
+    <div class="field"><div class="fl">Basis</div><div class="basis"><span class="bt">reasoned:</span> Agent PRs are generated from a prompt/spec, so a machine-readable intent already exists <em>upstream</em> of the diff. A PR groups "whatever the agent changed," not "what was requested" — so the gap between the two (undeclared edits) is both detectable and the most dangerous content. No competitor isolates it. <span class="bt">external:</span> Faros — agent PRs are larger and driftier; the scope-creep surface grows with PR size.</div></div>
+    <p class="field"><span class="fl" style="display:block;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:3px">Why it matters</span>This is the most AI-native idea in the set — it only makes sense in a world where code comes from an agent with a stated goal, and it attacks the failure mode (silent scope creep) that human-oriented review tools structurally miss. It's a differentiation story competitors can't bolt on.</p>
+    <div class="down"><div class="fl" style="font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;margin-bottom:3px">Downsides</div>Depends on a declared intent existing and being trustworthy. For human PRs or terse "fix stuff" descriptions you must <em>infer</em> intent (an LLM step that can be wrong), and mis-mapping a legitimate change as "scope creep" is an annoying false positive. Strongest when wired directly to the coding agent that emits structured intents.</div>
+  </article>
+
+  <!-- IDEA 3 -->
+  <article class="idea" id="i3">
+    <div class="idea-head"><span class="rid">3.</span><h3>Disposition-by-Defense — a Swipe That Costs More When It Should</h3></div>
+    <div class="chips"><span class="chip ax">A2 · triage interaction</span><span class="chip cf"><b>Confidence</b> 85%</span><span class="chip cx"><b>Complexity</b> Low-Medium</span></div>
+    <p>The swipe is the product's biggest moral hazard: it makes approval frictionless on exactly the PRs that already get rubber-stamped. Fix it with <em>variable friction</em>. Trivial chunks (renames, formatting, covered-by-tests) stay one-keystroke fast — that's the speed promise. But to accept a high-risk chunk, the reviewer must clear a one-tap, AI-generated comprehension check or "time-out" ("This widens auth scope from 24h to 1h token expiry — confirm you traced the call sites: y/n"). Friction becomes a feature, applied surgically where mindless approval is most expensive. The check pass-rate is itself a real, sellable anti-rubber-stamp metric.</p>
+    <figure>
+      <svg viewBox="0 0 760 150" role="img" aria-label="Low-risk chunks take a one-tap fast path; high-risk chunks route through a comprehension gate before acceptance.">
+        <rect x="14" y="20" width="120" height="40" rx="8" fill="var(--bg)" stroke="var(--line)"/>
+        <text x="74" y="44" class="svg-lbl" text-anchor="middle">incoming chunk</text>
+        <path d="M134 40 H210" stroke="var(--muted)" stroke-width="1.4" fill="none"/>
+        <path d="M210 26 l24 14 l-24 14 l-24 -14 Z" transform="translate(24,0)" fill="var(--accent-soft)" stroke="var(--accent)"/>
+        <text x="234" y="44" class="svg-mut" text-anchor="middle">risk?</text>
+        <!-- low path -->
+        <path d="M258 40 H360 V44" stroke="var(--good)" stroke-width="1.6" fill="none"/>
+        <text x="300" y="32" class="svg-mut" fill="var(--good)">low</text>
+        <rect x="360" y="22" width="180" height="36" rx="8" fill="var(--good-soft)" stroke="var(--good)"/>
+        <text x="450" y="44" class="svg-lbl" text-anchor="middle" fill="var(--good-text)">one-key accept · instant</text>
+        <!-- high path -->
+        <path d="M258 40 V108 H360" stroke="var(--risk)" stroke-width="1.6" fill="none"/>
+        <text x="300" y="100" class="svg-mut" fill="var(--risk)">high</text>
+        <rect x="360" y="90" width="200" height="36" rx="8" fill="var(--warn-soft)" stroke="var(--warn)"/>
+        <text x="460" y="112" class="svg-lbl" text-anchor="middle" fill="var(--warn-text)">comprehension check → accept</text>
+        <path d="M560 108 H620" stroke="var(--muted)" stroke-width="1.4" fill="none" stroke-dasharray="4 3"/>
+        <text x="690" y="112" class="svg-mut" text-anchor="middle">pass-rate = a metric</text>
+      </svg>
+      <figcaption>Speed for the 95%, a deliberate beat of friction for the 5% that can take down production.</figcaption>
+    </figure>
+    <div class="field"><div class="fl">Basis</div><div class="basis"><span class="bt">external:</span> Tinder/Avec swipe failure mode is "swipe fatigue → mindless throughput"; the WHO surgical "time-out" is the canonical mechanism for deliberately interrupting a fluent expert before an irreversible act. <span class="bt">reasoned:</span> matching gesture cost to stakes is the one lever that lets the product be both fast <em>and</em> honestly claim higher quality.</div></div>
+    <p class="field"><span class="fl" style="display:block;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:3px">Why it matters</span>It directly resolves the central tension the user named — playful/fast vs. highly professional. Without it, a swipe UI risks <em>industrializing</em> rubber-stamping; with it, the friction is the proof of diligence and the source of the quality metric.</p>
+    <div class="down"><div class="fl" style="font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;margin-bottom:3px">Downsides</div>Friction is friction — set the risk threshold too low and reviewers feel nagged and route around it; too high and it never fires. The comprehension question must be genuinely answerable from the card, or it becomes a "click yes" reflex (rubber-stamping the gate itself).</div>
+  </article>
+
+  <!-- IDEA 4 -->
+  <article class="idea" id="i4">
+    <div class="idea-head"><span class="rid">4.</span><h3>A Risk Portfolio, Not a Number</h3></div>
+    <div class="chips"><span class="chip ax">A4 · scoring</span><span class="chip cf"><b>Confidence</b> 85%</span><span class="chip cx"><b>Complexity</b> Medium</span></div>
+    <p>The global "score" is the documented trust-killer when it's a bare scalar. Replace the single number with a <em>portfolio</em>: a small set of named, evidenced risk positions — "2 untested API-boundary changes," "1 unrequested data-model edit," "auth scope widened" — each linking to the chunks that created it. The score becomes the <em>shape</em> of the risk, not a digit. And make it live: when a reviewer disagrees with the AI's read on a chunk and overrides it, the portfolio recomputes in real time, turning the score from an AI verdict into a shared reference point the team negotiates against. You clear positions; you don't chase a number.</p>
+    <figure>
+      <svg viewBox="0 0 760 170" role="img" aria-label="A single opaque score versus a portfolio of named, linked risk positions.">
+        <text x="14" y="20" class="svg-mut">OPAQUE SCALAR — ignored</text>
+        <circle cx="90" cy="92" r="46" fill="var(--bg)" stroke="var(--line)" stroke-width="2"/>
+        <text x="90" y="88" class="svg-lbl" text-anchor="middle" font-size="26" font-weight="700">6.2</text>
+        <text x="90" y="108" class="svg-mut" text-anchor="middle">/ 10</text>
+        <text x="200" y="96" class="svg-mut">"…6.2 of what? since when?"</text>
+        <line x1="380" y1="20" x2="380" y2="150" stroke="var(--line)"/>
+        <text x="404" y="20" class="svg-mut">PORTFOLIO — actionable</text>
+        <g>
+          <rect x="404" y="30" width="338" height="30" rx="6" fill="var(--risk-soft)" stroke="var(--risk)"/>
+          <text x="416" y="49" class="svg-lbl" fill="var(--risk)">● 2 untested API-boundary changes</text>
+          <text x="730" y="49" class="svg-mono" fill="var(--risk)" text-anchor="end">→ c12,c40</text>
+          <rect x="404" y="66" width="338" height="30" rx="6" fill="var(--warn-soft)" stroke="var(--warn)"/>
+          <text x="416" y="85" class="svg-lbl" fill="var(--warn-text)">● 1 unrequested data-model edit</text>
+          <text x="730" y="85" class="svg-mono" fill="var(--warn-text)" text-anchor="end">→ c31</text>
+          <rect x="404" y="102" width="338" height="30" rx="6" fill="var(--warn-soft)" stroke="var(--warn)"/>
+          <text x="416" y="121" class="svg-lbl" fill="var(--warn-text)">● auth scope widened</text>
+          <text x="730" y="121" class="svg-mono" fill="var(--warn-text)" text-anchor="end">→ c08</text>
+        </g>
+      </svg>
+      <figcaption>Glanceable like a score, auditable like a review — and each position is a link to the chunks behind it.</figcaption>
+    </figure>
+    <div class="field"><div class="fl">Basis</div><div class="basis"><span class="bt">external:</span> Snyk / Apiiro — engineers disengage from opaque scores they can't interrogate; multi-factor scores that expose their breakdown are trusted; best practice is advisory mode before enforcement. A negotiable, override-able score is inherently advisory — the human stays the authority.</div></div>
+    <p class="field"><span class="fl" style="display:block;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:3px">Why it matters</span>This is the trust foundation for everything that touches scoring — including any future merge-gate. Every scoring competitor lost credibility with scalars; a portfolio sidesteps the exact landmine the research names, and the override history is a clean training signal for where the AI's calibration drifts from the team's.</p>
+    <div class="down"><div class="fl" style="font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;margin-bottom:3px">Downsides</div>Teams and dashboards <em>want</em> a single number to sort and gate on; a portfolio resists that and needs a defensible roll-up anyway. Defining the canonical set of "risk position" types is real product work, and a portfolio with 15 positions is its own kind of noise.</div>
+  </article>
+
+  <!-- IDEA 5 -->
+  <article class="idea" id="i5">
+    <div class="idea-head"><span class="rid">5.</span><h3>Falsifiable AI Claims, One-Tap Refutable</h3></div>
+    <div class="chips"><span class="chip ax">A3 · explanation quality</span><span class="chip cf"><b>Confidence</b> 75%</span><span class="chip cx"><b>Complexity</b> Medium</span></div>
+    <p>Don't render the AI's explanation as trust-me prose ("This updates the session token"). Render it as a short set of <em>falsifiable claims</em>: <span style="font-family:var(--mono);font-size:13px">[CLAIM] does not change the public API contract</span> · <span style="font-family:var(--mono);font-size:13px">[CLAIM] the test on line 88 covers the new branch</span>. Each claim is one-tap "wrong," which (a) instantly expands to the diff proving or disproving it, and (b) logs a specific calibration signal. LLMs hallucinate most dangerously in prose — confidently asserting a test covers a branch it doesn't — and prose hides it. A claim forces the model to commit to something checkable, and forces diffsense to back it with evidence.</p>
+    <div class="field"><div class="fl">Basis</div><div class="basis"><span class="bt">external:</span> the same Snyk principle as the score — decompose the opaque assertion into interrogable factors. <span class="bt">reasoned:</span> a falsifiable claim is the textual equivalent of a score's factor-breakdown; "mark wrong" yields structured, collectable calibration data ("we mis-assess async test coverage 23% of the time") where freeform prose feedback is unstructured and lost.</div></div>
+    <p class="field"><span class="fl" style="display:block;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:3px">Why it matters</span>It raises the AI-explanation bar from "plausible" to "accountable," which is the only way a reviewer learns when to trust the AI versus look themselves. The refutation stream is the highest-quality training data the product can collect — revealed reviewer judgment, not survey clicks.</p>
+    <div class="down"><div class="fl" style="font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;margin-bottom:3px">Downsides</div>Forcing claims into a fixed schema can flatten nuance the prose captured, and a confidently-wrong claim is <em>more</em> dangerous than vague prose if reviewers trust the format. Enumerating the claim-set that covers ~80% of review concerns is unproven research work.</div>
+  </article>
+
+  <!-- IDEA 6 -->
+  <article class="idea" id="i6">
+    <div class="idea-head"><span class="rid">6.</span><h3>Reviewability Gate — PR Admissions Control</h3></div>
+    <div class="chips"><span class="chip ax">A5 · prevention &amp; workflow</span><span class="chip cf"><b>Confidence</b> 70%</span><span class="chip cx"><b>Complexity</b> Medium-High</span></div>
+    <p>The highest-leverage intervention happens <em>before</em> a human is ever paged. Run diffsense as a pre-merge gate that refuses PRs whose creation-time signals predict zero effective review — enormous size, no test delta, heavy API-boundary churn, no declared intent. The author (often the agent itself) must split it, annotate it, or justify it before a reviewer is summoned. This stops competing on "nicer summary of an unreviewable PR" and instead attacks the actual failure mode — rubber-stamping by omission — by refusing to let unreviewable PRs exist. It also moves the budget line from "nice-to-have tool" to CI/policy, a moment nobody currently owns.</p>
+    <div class="field"><div class="fl">Basis</div><div class="basis"><span class="bt">external:</span> arXiv 2601.00753 — the strongest predictive signal (AUC 0.96) exists <em>at PR creation time</em>, so the highest-leverage move is pre-review, not during; arXiv 2605.02273 — 61% of agent PRs get zero review, i.e. the worst PRs are exactly the unreviewable ones a gate would catch.</div></div>
+    <p class="field"><span class="fl" style="display:block;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:3px">Why it matters</span>It's a defensible wedge that converts diffsense from a viewer into infrastructure — "PR admissions control." Pairs naturally with idea 1 (the gate uses the same risk model that orders the queue) and idea 2 (a PR with no declared intent is, by definition, not admissible).</p>
+    <div class="down"><div class="fl" style="font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;margin-bottom:3px">Downsides</div>Blocking developers is the fastest way to get a tool uninstalled — enforcement backlash is the documented Snyk failure mode, so this <em>must</em> launch in advisory mode and earn trust before it blocks. Legitimate large PRs (vendored deps, generated code, big refactors) need clean override paths or it becomes the thing everyone routes around.</p></div>
+  </article>
+
+  <!-- IDEA 7 -->
+  <article class="idea" id="i7">
+    <div class="idea-head"><span class="rid">7.</span><h3>Chunk Fingerprint Registry — Review Memory That Compounds</h3></div>
+    <div class="chips"><span class="chip ax">A4 · compounding memory</span><span class="chip cf"><b>Confidence</b> 70%</span><span class="chip cx"><b>Complexity</b> High</span></div>
+    <p>Every chunk that passes through diffsense gets a structural fingerprint (AST shape, call-graph position, file-type signature, test-coverage delta). When a similar pattern recurs in a later PR — same repo or across the org — surface the prior disposition: <em>"Chunks like this were accepted 12/14 times here; the 2 rejections were both in <span style="font-family:var(--mono);font-size:13px">auth/</span>."</em> Not a rule engine — a precedent-recall surface. And every time a reviewer splits a chunk (the git-add-p gesture), record the AST boundary they chose; aggregate enough and the decomposition model learns where <em>humans</em> want boundaries, directly attacking the hardest open problem (the "reviewable unit" heuristic). More reviews → sharper chunks and sharper precedent → faster reviews. That loop is the moat.</p>
+    <figure>
+      <svg viewBox="0 0 760 150" role="img" aria-label="A compounding loop: reviews produce fingerprints and split labels, which sharpen chunking and precedent, which speed future reviews.">
+        <g>
+          <rect x="40" y="55" width="150" height="40" rx="9" fill="var(--accent-soft)" stroke="var(--accent)"/>
+          <text x="115" y="79" class="svg-lbl" text-anchor="middle" fill="var(--accent-text)">reviews</text>
+          <rect x="300" y="14" width="170" height="40" rx="9" fill="var(--bg)" stroke="var(--line)"/>
+          <text x="385" y="38" class="svg-lbl" text-anchor="middle">fingerprints + split labels</text>
+          <rect x="300" y="96" width="170" height="40" rx="9" fill="var(--bg)" stroke="var(--line)"/>
+          <text x="385" y="120" class="svg-lbl" text-anchor="middle">sharper chunks + precedent</text>
+          <rect x="580" y="55" width="150" height="40" rx="9" fill="var(--good-soft)" stroke="var(--good)"/>
+          <text x="655" y="79" class="svg-lbl" text-anchor="middle" fill="var(--good-text)">faster, surer review</text>
+        </g>
+        <g fill="none" stroke="var(--muted)" stroke-width="1.5">
+          <path d="M150 55 C200 20 250 18 300 28" marker-end="url(#ar)"/>
+          <path d="M470 30 C520 45 525 80 470 108" marker-end="url(#ar)"/>
+          <path d="M470 116 C540 116 560 100 580 86" marker-end="url(#ar)"/>
+          <path d="M655 95 C655 140 250 140 115 96" marker-end="url(#ar)" stroke-dasharray="5 4" stroke="var(--accent)"/>
+        </g>
+        <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 Z" fill="var(--muted)"/></marker></defs>
+      </svg>
+      <figcaption>Each review is an asset, not a throwaway — the dataset only exists inside diffsense.</figcaption>
+    </figure>
+    <div class="field"><div class="fl">Basis</div><div class="basis"><span class="bt">external:</span> SemanticDiff already fingerprints structure (groups renames into one card, detects moved code) — the infrastructure exists. <span class="bt">reasoned:</span> human split decisions are ground-truth labels for "where a reviewable unit belongs" — a free supervision signal no static heuristic can match; precedent recall directly counters AI-generated boilerplate that repeats across PRs.</div></div>
+    <p class="field"><span class="fl" style="display:block;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:3px">Why it matters</span>It's the durable defensibility story. A chunking model trained on 10,000 human split decisions in a specific stack — plus org-level precedent — is something a well-funded competitor can't copy without the same review history. It turns usage into a widening lead.</p>
+    <div class="down"><div class="fl" style="font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;margin-bottom:3px">Downsides</div>Severe cold-start — worthless on day one and on every new repo until volume accumulates, so it can't be the launch wedge. Precedent recall can ossify bad habits ("we always approved this, so approve it") and the fingerprint-similarity matching is genuine ML engineering, not a weekend feature.</div>
+  </article>
+
+  <div class="swing">
+    <div class="fl">Two big swings parked for later (not cut on merit)</div>
+    <p><strong>Review the generation, not the diff</strong> — hook into the agent loop so risky chunks are caught and regenerated <em>before</em> a PR ever opens, shrinking the artifact at birth rather than coping with its size. Highest ceiling in the whole set, but it shifts the product from "PR reviewer" toward "agent-loop guardrail," so it's a deliberate phase-2 bet. And <strong>call-graph blast-radius edges between cards</strong> — show that approving chunk 12 (a signature change) implicates chunks 31, 47, 89; reverse 12 and they re-open. Novel and grounded (Apiiro Risk Graph), parked only to keep the launch set focused.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Rejection Summary</h2>
+  <table>
+    <thead><tr><th style="width:30%">Idea</th><th>Reason cut</th></tr></thead>
+    <tbody>
+      <tr><td><b>Silent auto-approval</b> of sub-threshold chunks</td><td><span class="rj">refuted</span> — chunk-level AI confidence is unknown and likely below the PR-level AUC 0.96; one wrong silent approval breaks trust irrecoverably; contradicts the product's adversarial premise.</td></tr>
+      <tr><td><b>Hard merge-gate</b> on the global score</td><td><span class="rj">refuted</span> — directly contradicts its own cited evidence (advisory-before-enforcement); guarantees the Snyk enforcement backlash. Survives only as the <em>portfolio</em> (idea 4) + advisory <em>gate</em> (idea 6).</td></tr>
+      <tr><td><b>Zero human reviewers</b> (diffsense as reviewer-of-record)</td><td><span class="rj">refuted</span> — abandons the AI-assisted-<em>human</em> premise; the 61%-zero-review stat is the problem to solve, not a mandate to remove humans; unaddressed liability gap.</td></tr>
+      <tr><td><b>Hardest-first queue</b> / <b>60-second-review</b> promise / <b>radiology worklist</b></td><td><span class="rj">merged</span> — all the same risk-ordering insight; absorbed into idea 1, the strongest instantiation (ordering + budget + audited tail).</td></tr>
+      <tr><td><b>Forced reason-tag</b> before swipe / <b>Review Velocity Index</b></td><td><span class="rj">merged</span> — same anti-rubber-stamp goal as idea 3, with weaker teeth; a tag/metric informs, a variable-friction gate changes behavior.</td></tr>
+      <tr><td><b>AQL acceptance sampling</b> (inspect a sample, tighten on defects)</td><td><span class="rj">analogy breaks</span> — manufactured parts are i.i.d.; a defect in chunk 47 implies nothing about chunk 12. Statistical sampling logic doesn't transfer to code.</td></tr>
+      <tr><td><b>Roguelike run economy</b> (score = quality of attention)</td><td><span class="rj">unfalsifiable</span> — playful branding without a definable mechanism; risks trivializing review in enterprise contexts.</td></tr>
+      <tr><td><b>ATC handoff</b> · <b>peer-review personas</b> · <b>domain-partition assignment</b></td><td><span class="rj">niche dependency</span> — all assume simultaneous multi-reviewer sessions; most PRs have one reviewer. Park until a team-collaboration phase.</td></tr>
+      <tr><td><b>Audit trail / tickmarks</b> · <b>MTPE author-scoring</b> · <b>calibration graph</b> · <b>convention extractor</b> · <b>team-risk model</b></td><td><span class="rj">enricher</span> — real value, but analytics/compliance features or severe cold-start; better layered onto idea 7's data flywheel than launched standalone.</td></tr>
+      <tr><td><b>Zero-roundtrip GitHub sync</b></td><td><span class="rj">table-stakes</span> — necessary product hygiene every competitor already has; an implementation requirement, not a differentiating direction.</td></tr>
+      <tr><td><b>Non-programmer (behavior-level) reviewer</b></td><td><span class="rj">parked</span> — genuine market-expansion insight (PMs reviewing intent), but a second audience widens scope beyond the core wedge; revisit once the engineer-facing product lands.</td></tr>
+    </tbody>
+  </table>
+  <p style="font-size:13.5px;color:var(--muted);margin-top:14px">All five axes carry at least one survivor — A1 (idea 2, 7), A2 (idea 3), A3 (idea 5), A4 (idea 4, 7), A5 (idea 1, 6). No axis was left empty.</p>
+</section>
+
+<footer class="composition-signal">Composed 2026-06-18 by ce-ideate · source: user prompt (greenfield concept "diffsense", no repo) · elsewhere-software mode · 37 raw candidates → 7 survivors across 5 axes.</footer>
+
+</div>
+</body>
+</html>
