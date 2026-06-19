@@ -1,6 +1,6 @@
-import { App } from "@octokit/app";
 import { Worker } from "bullmq";
 import { Redis } from "ioredis";
+import { App } from "octokit";
 import type { GitHubClient } from "../adapters/github.js";
 import type { Config } from "../config.js";
 import { type PrRef, REVIEW_QUEUE_NAME } from "../types.js";
