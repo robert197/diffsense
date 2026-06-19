@@ -1,0 +1,15 @@
+import { fileURLToPath } from "node:url";
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+  resolve: {
+    alias: {
+      "@diffsense/core": fileURLToPath(new URL("./packages/core/src/index.ts", import.meta.url)),
+      "@diffsense/llm": fileURLToPath(new URL("./packages/llm/src/index.ts", import.meta.url)),
+    },
+  },
+  test: {
+    include: ["packages/*/src/**/*.test.ts", "apps/*/src/**/*.test.ts"],
+    environment: "node",
+  },
+});
