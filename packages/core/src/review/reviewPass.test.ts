@@ -33,6 +33,8 @@ function fakeProvider(tag = "fake") {
       requests.push(request);
       return review(`${tag}:${request.chunk.file}:${request.modelClass}`);
     }),
+    // The review pass never verifies — fail loudly if a refactor wires it in here.
+    verifyFinding: vi.fn().mockRejectedValue(new Error("verifyFinding not expected in reviewPass")),
   };
   return { provider, requests };
 }
