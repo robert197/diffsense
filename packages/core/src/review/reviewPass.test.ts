@@ -33,8 +33,9 @@ function fakeProvider(tag = "fake") {
       requests.push(request);
       return review(`${tag}:${request.chunk.file}:${request.modelClass}`);
     }),
-    // The review pass never verifies — fail loudly if a refactor wires it in here.
+    // The review pass never verifies or synthesizes — fail loudly if a refactor wires either in here.
     verifyFinding: vi.fn().mockRejectedValue(new Error("verifyFinding not expected in reviewPass")),
+    synthesize: vi.fn().mockRejectedValue(new Error("synthesize not expected in reviewPass")),
   };
   return { provider, requests };
 }
