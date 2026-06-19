@@ -45,8 +45,9 @@ function fakePorts(opts?: { callSites?: CodeReference[] }) {
     set: vi.fn(async () => undefined),
   };
   const findingStore: FindingStore = {
-    record: vi.fn(async (f: ReviewFinding) => {
-      recorded.push(f);
+    replaceForPr: vi.fn(async (_ref, list: ReviewFinding[]) => {
+      recorded.length = 0;
+      recorded.push(...list);
     }),
     listByPr: vi.fn(async () => recorded),
   };
@@ -95,7 +96,7 @@ describe("reviewAndPersistFindings (#13)", () => {
     expect(f?.rank).toBe(0);
     expect(f?.explanation).toBe("change in src/auth/login.ts");
     expect(f?.blastRadius).toEqual(["src/app.ts:3 login()"]);
-    expect(ports.findingStore.record).toHaveBeenCalledOnce();
+    expect(ports.findingStore.replaceForPr).toHaveBeenCalledOnce();
     expect(ports.recorded).toEqual(findings);
   });
 
@@ -105,10 +106,12 @@ describe("reviewAndPersistFindings (#13)", () => {
     expect(findings[0]?.blastRadius).toEqual([]);
   });
 
-  it("does nothing when the diff has no selectable chunks", async () => {
+  it("clears the PR's findings when the diff has no selectable chunks", async () => {
     const ports = fakePorts();
     const findings = await reviewAndPersistFindings({ ...meta, diff: "" }, ports);
     expect(findings).toEqual([]);
-    expect(ports.findingStore.record).not.toHaveBeenCalled();
+    // Replace with an empty set so a reverted PR drops its stale cards.
+    expect(ports.findingStore.replaceForPr).toHaveBeenCalledOnce();
+    expect(ports.recorded).toEqual([]);
   });
 });

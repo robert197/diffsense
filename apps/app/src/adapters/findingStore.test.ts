@@ -22,16 +22,31 @@ function rowFrom(f: ReviewFinding) {
   return { ...f, id: 1, createdAt: new Date() };
 }
 
+/** Minimal transaction stub: captures the delete + insert the swap issues. */
+function txStub() {
+  const deleteWhere = vi.fn(async () => undefined);
+  const del = vi.fn(() => ({ where: deleteWhere }));
+  const insertValues = vi.fn(async (_rows: Record<string, unknown>[]) => undefined);
+  const insert = vi.fn(() => ({ values: insertValues }));
+  const tx = { delete: del, insert };
+  const transaction = vi.fn(async (fn: (t: typeof tx) => Promise<void>) => fn(tx));
+  return { transaction, del, deleteWhere, insert, insertValues };
+}
+
 describe("createDrizzleFindingStore (#13)", () => {
-  it("record inserts the mapped column values", async () => {
-    const values = vi.fn(async (_row: Record<string, unknown>) => undefined);
-    const insert = vi.fn(() => ({ values }));
-    const db = { insert } as unknown as Database;
+  it("replaceForPr deletes the PR's rows then inserts the new run in one transaction", async () => {
+    const t = txStub();
+    const db = { transaction: t.transaction } as unknown as Database;
 
-    await createDrizzleFindingStore(db).record(finding);
+    await createDrizzleFindingStore(db).replaceForPr({ owner: "octo", repo: "demo", prNumber: 7 }, [
+      finding,
+    ]);
 
-    expect(values).toHaveBeenCalledOnce();
-    expect(values.mock.calls[0]?.[0]).toMatchObject({
+    expect(t.transaction).toHaveBeenCalledOnce();
+    expect(t.del).toHaveBeenCalledOnce();
+    expect(t.insertValues).toHaveBeenCalledOnce();
+    expect(t.insertValues.mock.calls[0]?.[0]).toHaveLength(1);
+    expect(t.insertValues.mock.calls[0]?.[0]?.[0]).toMatchObject({
       owner: "octo",
       repo: "demo",
       prNumber: 7,
@@ -43,6 +58,19 @@ describe("createDrizzleFindingStore (#13)", () => {
       reasons: finding.reasons,
       blastRadius: finding.blastRadius,
     });
+  });
+
+  it("replaceForPr deletes but skips the insert when the new run is empty", async () => {
+    const t = txStub();
+    const db = { transaction: t.transaction } as unknown as Database;
+
+    await createDrizzleFindingStore(db).replaceForPr(
+      { owner: "octo", repo: "demo", prNumber: 7 },
+      [],
+    );
+
+    expect(t.del).toHaveBeenCalledOnce();
+    expect(t.insert).not.toHaveBeenCalled();
   });
 
   it("listByPr maps rows back to validated findings", async () => {

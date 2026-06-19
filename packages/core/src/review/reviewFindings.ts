@@ -109,9 +109,9 @@ export async function reviewAndPersistFindings(
   }
 
   const findings = toFindings(results, { owner, repo, prNumber, blastRadius });
-  for (const finding of findings) {
-    await ports.findingStore.record(finding);
-  }
+  // Replace, don't append: a re-pushed PR re-runs this pass, and the card view
+  // must show only the newest run — not stacked duplicates of recurring chunks.
+  await ports.findingStore.replaceForPr({ owner, repo, prNumber }, findings);
   return findings;
 }
 

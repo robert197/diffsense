@@ -91,10 +91,11 @@ export const fingerprints = pgTable(
  * Per-chunk review findings (issue #13, docs/ARCHITECTURE.md §6) — the read-model
  * the hosted card view renders. One row per reviewed chunk: its identity, its
  * within-PR risk order, the review content (explanation/claims/reasons), and the
- * chunk's blast radius. Append-only — a re-review adds rows and `listByPr` orders
- * by `rank asc, id desc` so the newest run's findings win. `FindingStore` (in
- * `core`) is the port; this is the table its Drizzle adapter writes, and the one
- * `apps/web` reads back.
+ * chunk's blast radius. One run's findings at a time per PR: a re-review replaces
+ * the PR's rows (`FindingStore.replaceForPr`, transactional delete + insert), so
+ * the card view never shows stacked duplicates of recurring chunks. `listByPr`
+ * orders by `rank asc`. `FindingStore` (in `core`) is the port; this is the table
+ * its Drizzle adapter writes, and the one `apps/web` reads back.
  */
 export const findings = pgTable("findings", {
   id: serial("id").primaryKey(),
