@@ -152,7 +152,7 @@ A region is scope creep only when it serves none of the declared intents. Be pre
 
 Return:
 - declaredIntents: the distinct intents you read from the title + description.
-- findings: one entry per changed region that matches no declared intent. Use the file path exactly as it appears in the diff, a plain-language summary of what the out-of-scope edit does, and the rationale for why it serves none of the declared intents. Return an empty list when every change maps to a declared intent.`;
+- findings: one entry per changed region that matches no declared intent. Use the bare repo-relative file path (no \`a/\` or \`b/\` prefix), a plain-language summary of what the out-of-scope edit does, and the rationale for why it serves none of the declared intents. Return an empty list when every change maps to a declared intent.`;
 
 /** The per-PR user prompt — the declared intent plus the full diff to map. */
 export function buildScopePrompt({ diff, intent }: ScopeRequest): string {

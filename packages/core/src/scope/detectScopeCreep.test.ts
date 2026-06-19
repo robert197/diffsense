@@ -112,6 +112,20 @@ describe("detectScopeCreep", () => {
     expect(findings.map((f) => f.file)).toEqual(["src/auth.ts"]);
   });
 
+  it("matches a finding whose path still carries the a/ or b/ diff prefix", async () => {
+    // parse-diff strips a/ and b/; the model reads the raw diff and may echo the
+    // prefixed form. The shell must normalize it, not drop the finding.
+    const { provider } = fakeScoper(() => ({
+      declaredIntents: ["add rate limiting"],
+      findings: [{ ...authFinding, file: "b/src/auth.ts" }],
+    }));
+
+    const findings = await detectScopeCreep(DIFF, INTENT, { llm: provider });
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.file).toBe("src/auth.ts");
+  });
+
   it("propagates an LLM rejection to the caller", async () => {
     const provider: LLMProvider = {
       reviewChunk: vi.fn(),

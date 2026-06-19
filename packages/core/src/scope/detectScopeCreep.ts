@@ -35,6 +35,16 @@ function changedFiles(diff: string): ReadonlySet<string> {
 }
 
 /**
+ * Drop a leading `a/` or `b/` git diff prefix. parse-diff already strips these
+ * from the paths it returns, but the LLM reads the raw diff (`--- a/src/auth.ts`)
+ * and may echo the prefixed form back; normalizing both sides keeps the membership
+ * check from silently dropping every real finding.
+ */
+function stripDiffPrefix(path: string): string {
+  return path.replace(/^[ab]\//, "");
+}
+
+/**
  * Map the diff against the PR's declared intent and return the regions that match
  * no declared intent as scope-creep findings. An empty diff never reaches the LLM
  * (cost guard). A finding must point at a file the diff actually changes — the
@@ -51,5 +61,7 @@ export async function detectScopeCreep(
     return [];
   }
   const report = await ports.llm.detectScopeCreep({ diff, intent });
-  return report.findings.filter((finding) => touched.has(finding.file));
+  return report.findings
+    .map((finding) => ({ ...finding, file: stripDiffPrefix(finding.file) }))
+    .filter((finding) => touched.has(finding.file));
 }
