@@ -1,0 +1,90 @@
+# Self-hosted local stack (docs/STACK.md §Docker). `docker compose up` boots
+# app + worker + postgres + redis (+ web stub). Migrations run as a one-shot
+# before app/worker start. Caddy (auto-TLS) is optional this slice — add a
+# reverse-proxy service when deploying with a domain.
+#
+# Secrets come from .env (copy .env.example → .env). DATABASE_URL / REDIS_URL
+# are overridden here to point at the compose services.
+
+x-app-env: &app-env
+  DATABASE_URL: postgres://diffsense:diffsense@postgres:5432/diffsense
+  REDIS_URL: redis://redis:6379
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: diffsense
+      POSTGRES_PASSWORD: diffsense
+      POSTGRES_DB: diffsense
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U diffsense"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build: .
+    environment:
+      <<: *app-env
+      ROLE: migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    build: .
+    env_file: .env
+    environment:
+      <<: *app-env
+      ROLE: serve
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build: .
+    env_file: .env
+    environment:
+      <<: *app-env
+      ROLE: worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build: .
+    environment:
+      ROLE: web
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:

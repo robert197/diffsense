@@ -1,0 +1,31 @@
+{
+  "name": "@diffsense/app",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "serve": "tsx src/main.ts serve",
+    "worker": "tsx src/main.ts worker",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@diffsense/core": "workspace:*",
+    "@diffsense/llm": "workspace:*",
+    "@hono/node-server": "^1.13.7",
+    "@octokit/app": "^15.1.4",
+    "@octokit/webhooks": "^13.4.1",
+    "bullmq": "^5.34.5",
+    "drizzle-orm": "^0.38.3",
+    "hono": "^4.6.14",
+    "ioredis": "^5.4.2",
+    "octokit": "^4.0.2",
+    "postgres": "^3.4.5",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "drizzle-kit": "^0.30.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

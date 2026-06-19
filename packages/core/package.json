@@ -1,0 +1,20 @@
+{
+  "name": "@diffsense/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "parse-diff": "^0.11.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

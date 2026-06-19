@@ -1,0 +1,14 @@
+{
+  "action": "synchronize",
+  "number": 42,
+  "pull_request": {
+    "number": 42,
+    "title": "Add a feature",
+    "body": "This PR adds a feature."
+  },
+  "repository": {
+    "name": "demo",
+    "owner": { "login": "octo-org" }
+  },
+  "installation": { "id": 12345 }
+}
