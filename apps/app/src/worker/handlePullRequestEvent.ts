@@ -1,9 +1,14 @@
-import { rankHunks, renderComment } from "@diffsense/core";
+import { type ReactionOptions, rankHunks, renderComment } from "@diffsense/core";
 import { type GitHubClient, type UpsertResult, upsertReviewComment } from "../adapters/github.js";
 import type { PrRef } from "../types.js";
 
 /** The event shape the seam needs — a narrowed `PrRef`. */
 export type PullRequestEvent = Pick<PrRef, "owner" | "repo" | "prNumber" | "action">;
+
+export interface HandleOptions {
+  /** Public ingress URL; enables the 👍/👎 reaction links in the comment. */
+  reactionBaseUrl?: string;
+}
 
 /**
  * The single integration seam every later slice plugs into (KTD5). Fetches the
@@ -14,6 +19,7 @@ export type PullRequestEvent = Pick<PrRef, "owner" | "repo" | "prNumber" | "acti
 export async function handlePullRequestEvent(
   event: PullRequestEvent,
   octokit: GitHubClient,
+  opts: HandleOptions = {},
 ): Promise<UpsertResult> {
   const { owner, repo, prNumber } = event;
 
@@ -32,6 +38,9 @@ export async function handlePullRequestEvent(
   }
 
   const ranked = rankHunks(data, { owner, repo, prNumber });
-  const body = renderComment(ranked);
+  const reactions: ReactionOptions | undefined = opts.reactionBaseUrl
+    ? { reactionBaseUrl: opts.reactionBaseUrl, pr: { owner, repo, prNumber } }
+    : undefined;
+  const body = renderComment(ranked, reactions);
   return upsertReviewComment(octokit, { owner, repo, prNumber, body });
 }

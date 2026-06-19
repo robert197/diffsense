@@ -24,7 +24,7 @@ export function startWorker(config: Config): Worker<PrRef> {
         ref.installationId,
       )) as unknown as GitHubClient;
       // PrRef is a superset of PullRequestEvent — pass it directly.
-      await handlePullRequestEvent(ref, octokit);
+      await handlePullRequestEvent(ref, octokit, { reactionBaseUrl: config.publicBaseUrl });
     },
     { connection },
   );

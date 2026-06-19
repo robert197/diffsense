@@ -186,3 +186,100 @@ describe("rankHunks — determinism and deep links (R1)", () => {
     expect(reason).not.toContain("\n");
   });
 });
+
+describe("rankHunks — demotion of machine-written noise (R1)", () => {
+  it("demotes a large lockfile to Low while a small source change stays High", () => {
+    const diff = fileDiff("pnpm-lock.yaml", 400, 0) + fileDiff("src/auth/login.ts", 3, 0);
+    const ranked = rankHunks(diff, META);
+    const lock = ranked.find((c) => c.file === "pnpm-lock.yaml");
+    const auth = ranked.find((c) => c.file === "src/auth/login.ts");
+    expect(lock?.tier).toBe("Low");
+    expect(lock?.signals.demoted).toBe(true);
+    expect(lock?.signals.demotionReason).toBe("lockfile");
+    expect(auth?.tier).toBe("High");
+    expect(auth?.signals.demoted).toBe(false);
+  });
+
+  it("never places a demoted hunk in High or Medium even when largest", () => {
+    const diff =
+      fileDiff("dist/bundle.min.js", 500, 0) +
+      fileDiff("assets/logo.png", 200, 0) +
+      fileDiff("src/lib/widget.ts", 2, 0);
+    const ranked = rankHunks(diff, META);
+    const flagged = ranked.filter((c) => c.tier === "High" || c.tier === "Medium");
+    expect(flagged.every((c) => !c.signals.demoted)).toBe(true);
+    expect(ranked.find((c) => c.file === "src/lib/widget.ts")?.tier).toBe("High");
+  });
+
+  it("excludes demoted hunks from the percentile base", () => {
+    // One real hunk plus three demoted: the real hunk is still High, not Medium.
+    const diff =
+      fileDiff("src/lib/real.ts", 5, 0) +
+      fileDiff("yarn.lock", 80, 0) +
+      fileDiff("package-lock.json", 90, 0) +
+      fileDiff("go.sum", 70, 0);
+    const ranked = rankHunks(diff, META);
+    expect(ranked.find((c) => c.file === "src/lib/real.ts")?.tier).toBe("High");
+    expect(ranked.filter((c) => c.signals.demoted)).toHaveLength(3);
+  });
+
+  it("labels the reason for a demoted hunk", () => {
+    const ranked = rankHunks(fileDiff("dist/app.min.js", 10, 0), META);
+    expect(ranked[0]?.reason).toBe("Generated file, demoted");
+  });
+
+  it("produces an all-Low ranking when every hunk is demoted", () => {
+    const diff = fileDiff("pnpm-lock.yaml", 200, 0) + fileDiff("dist/bundle.min.js", 300, 0);
+    const ranked = rankHunks(diff, META);
+    expect(ranked).toHaveLength(2);
+    expect(ranked.every((c) => c.tier === "Low")).toBe(true);
+    expect(ranked.filter((c) => c.tier === "High")).toHaveLength(0);
+  });
+});
+
+describe("rankHunks — graceful fallback on unrecognized languages (R2)", () => {
+  it("produces a valid ranking for unknown-language files without throwing", () => {
+    const diff = fileDiff("app/main.zig", 20, 0) + fileDiff("lib/thing.elm", 5, 0);
+    const ranked = rankHunks(diff, META);
+    expect(ranked).toHaveLength(2);
+    // Size-driven order, deterministic, every chunk carries a tier.
+    expect(ranked[0]?.file).toBe("app/main.zig");
+    expect(ranked.every((c) => c.tier === "High" || c.tier === "Medium" || c.tier === "Low")).toBe(
+      true,
+    );
+  });
+
+  it("contributes zero from unmatched signals: score reflects size alone", () => {
+    const ranked = rankHunks(fileDiff("app/main.zig", 7, 0), META);
+    const chunk = ranked[0];
+    expect(chunk?.signals.riskPath).toBe(false);
+    expect(chunk?.signals.apiBoundary).toBe(false);
+    expect(chunk?.signals.missingTestDelta).toBe(false);
+    expect(chunk?.score).toBeCloseTo(Math.log2(1 + 7), 10);
+  });
+
+  it("still credits a risk path even when the extension is unknown", () => {
+    const diff = fileDiff("src/auth/handler.unknownext", 3, 0) + fileDiff("lib/plain.zig", 3, 0);
+    const ranked = rankHunks(diff, META);
+    expect(ranked[0]?.file).toBe("src/auth/handler.unknownext");
+    expect(ranked[0]?.signals.riskPath).toBe(true);
+    expect(ranked[0]?.signals.riskPathLabel).toBe("auth");
+  });
+});
+
+describe("rankHunks — chunk fingerprint (R3)", () => {
+  it("gives every chunk a stable 16-char fingerprint", () => {
+    const ranked = rankHunks(fileDiff("src/lib/a.ts", 2, 0), META);
+    expect(ranked[0]?.fingerprint).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it("differs by file/line and is stable across calls", () => {
+    const diff = fileDiff("src/a.ts", 2, 0) + fileDiff("src/b.ts", 2, 0);
+    const first = rankHunks(diff, META);
+    const second = rankHunks(diff, META);
+    const fpsA = first.map((c) => c.fingerprint);
+    const fpsB = second.map((c) => c.fingerprint);
+    expect(fpsA).toEqual(fpsB);
+    expect(new Set(fpsA).size).toBe(fpsA.length);
+  });
+});

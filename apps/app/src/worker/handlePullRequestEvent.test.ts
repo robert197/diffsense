@@ -107,4 +107,27 @@ describe("handlePullRequestEvent (R3, R4, R5)", () => {
     expect(fake.createComment).not.toHaveBeenCalled();
     expect(fake.updateComment).not.toHaveBeenCalled();
   });
+
+  it("embeds 👍/👎 reaction links when a base URL is provided", async () => {
+    const fake = makeFakeOctokit({});
+
+    await handlePullRequestEvent(openedEvent, fake.octokit, {
+      reactionBaseUrl: "https://diffsense.example",
+    });
+
+    const body = fake.createComment.mock.calls[0]?.[0].body as string;
+    expect(body).toContain("https://diffsense.example/reactions?");
+    expect(body).toContain("👍");
+    expect(body).toContain("s=down");
+  });
+
+  it("omits reaction links when no base URL is provided", async () => {
+    const fake = makeFakeOctokit({});
+
+    await handlePullRequestEvent(openedEvent, fake.octokit);
+
+    const body = fake.createComment.mock.calls[0]?.[0].body as string;
+    expect(body).not.toContain("/reactions?");
+    expect(body).not.toContain("👍");
+  });
 });

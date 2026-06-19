@@ -1,5 +1,7 @@
 import { serve } from "@hono/node-server";
+import { createDrizzleReactionStore } from "./adapters/reactionStore.js";
 import { loadConfig } from "./config.js";
+import { createDb } from "./db/client.js";
 import { createServer } from "./ingress/server.js";
 import { createProducer } from "./queue/producer.js";
 import { startWorker } from "./worker/index.js";
@@ -32,13 +34,19 @@ const config = loadConfig();
 
 if (role === "serve") {
   const producer = createProducer(config.redisUrl);
+  const { db, client } = createDb(config.databaseUrl);
+  const reactionStore = createDrizzleReactionStore(db);
   const app = createServer({
     webhookSecret: config.githubWebhookSecret,
     enqueue: producer.enqueue,
+    recordReaction: reactionStore.record,
   });
   serve({ fetch: app.fetch, port: config.port });
   console.log(`diffsense serve listening on :${config.port}`);
-  onShutdown(() => producer.close());
+  onShutdown(async () => {
+    await producer.close();
+    await client.end();
+  });
 } else if (role === "worker") {
   const worker = startWorker(config);
   console.log("diffsense worker started");

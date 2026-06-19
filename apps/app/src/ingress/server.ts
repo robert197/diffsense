@@ -1,3 +1,4 @@
+import { type ChunkReaction, ChunkReactionSchema } from "@diffsense/core";
 import { Webhooks } from "@octokit/webhooks";
 import { Hono } from "hono";
 import type { PrRef } from "../types.js";
@@ -7,6 +8,12 @@ const MAX_BODY_BYTES = 5_000_000;
 export interface IngressDeps {
   webhookSecret: string;
   enqueue: (ref: PrRef) => Promise<void>;
+  /**
+   * Records a reviewer 👍/👎 on a flagged chunk (issue #3). Optional: when
+   * absent, the `/reactions` route is inert (404) so a deployment that has not
+   * wired a store does not advertise a broken link.
+   */
+  recordReaction?: (reaction: ChunkReaction) => Promise<void>;
 }
 
 /** Minimal shape of the `pull_request` webhook payload fields we consume. */
@@ -57,11 +64,41 @@ async function readBodyCapped(req: Request, maxBytes: number): Promise<string> {
  * (KTD4), and acks 202 fast. Signature failures → 401. The producer is
  * injected so tests run without Redis.
  */
-export function createServer({ webhookSecret, enqueue }: IngressDeps): Hono {
+export function createServer({ webhookSecret, enqueue, recordReaction }: IngressDeps): Hono {
   const app = new Hono();
   const webhooks = new Webhooks({ secret: webhookSecret });
 
   app.get("/healthz", (c) => c.json({ ok: true }));
+
+  // One-click reviewer feedback (issue #3). The 👍/👎 links in the ranked
+  // comment point here. A GET that records is the pragmatic choice for a
+  // click-through link in a GitHub comment; the data is advisory, non-auth
+  // signal, so this is an acceptable trade for the MVP. Params are validated by
+  // the same Zod schema the store expects.
+  app.get("/reactions", async (c) => {
+    if (!recordReaction) {
+      return c.json({ error: "reactions not enabled" }, 404);
+    }
+    const q = c.req.query();
+    const parsed = ChunkReactionSchema.safeParse({
+      owner: q.owner,
+      repo: q.repo,
+      prNumber: Number(q.pr),
+      fingerprint: q.fp,
+      tier: q.tier,
+      sentiment: q.s,
+    });
+    if (!parsed.success) {
+      return c.json({ error: "invalid reaction parameters" }, 400);
+    }
+    try {
+      await recordReaction(parsed.data);
+    } catch (err) {
+      console.error("failed to record reaction:", err);
+      return c.json({ error: "could not record reaction" }, 503);
+    }
+    return c.text("Thanks, recorded. You can close this tab.");
+  });
 
   app.post("/webhook", async (c) => {
     const signature = c.req.header("x-hub-signature-256");

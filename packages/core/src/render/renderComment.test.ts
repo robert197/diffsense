@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RankedChunk, Tier } from "../rank/rankHunks.js";
-import { renderComment } from "./renderComment.js";
+import { type ReactionOptions, renderComment } from "./renderComment.js";
 
 function chunk(file: string, tier: Tier, reason = "Small change (1 lines)"): RankedChunk {
   return {
@@ -13,15 +13,23 @@ function chunk(file: string, tier: Tier, reason = "Small change (1 lines)"): Ran
     tier,
     reason,
     deepLink: "https://github.com/o/r/pull/1/files#diff-abcR10",
+    fingerprint: `fp-${file}`,
     signals: {
       sizeScore: 1,
       riskPath: false,
       riskPathLabel: null,
       apiBoundary: false,
       missingTestDelta: false,
+      demoted: false,
+      demotionReason: null,
     },
   };
 }
+
+const REACTIONS: ReactionOptions = {
+  reactionBaseUrl: "https://diffsense.example",
+  pr: { owner: "o", repo: "r", prNumber: 1 },
+};
 
 const NO_MERGE_WORDS = /\b(block|approve|approved|lgtm|request changes|merge)\b/i;
 
@@ -82,5 +90,43 @@ describe("renderComment (R3, R4)", () => {
     ]);
     expect(out).not.toMatch(NO_MERGE_WORDS);
     expect(renderComment([])).not.toMatch(NO_MERGE_WORDS);
+  });
+});
+
+describe("renderComment — reaction affordance (R3)", () => {
+  it("adds 👍/👎 links to each flagged chunk when reactions are configured", () => {
+    const out = renderComment(
+      [chunk("src/auth/login.ts", "High"), chunk("src/api/users.ts", "Medium")],
+      REACTIONS,
+    );
+    expect(out).toContain("👍");
+    expect(out).toContain("👎");
+    expect(out).toContain("https://diffsense.example/reactions?");
+    expect(out).toContain("s=up");
+    expect(out).toContain("s=down");
+  });
+
+  it("encodes the chunk fingerprint and tier in the reaction links", () => {
+    const out = renderComment([chunk("src/auth/login.ts", "High")], REACTIONS);
+    expect(out).toContain("fp=fp-src%2Fauth%2Flogin.ts");
+    expect(out).toContain("tier=High");
+    expect(out).toContain("owner=o");
+    expect(out).toContain("repo=r");
+    expect(out).toContain("pr=1");
+  });
+
+  it("does not add an affordance to the Low remainder line", () => {
+    const out = renderComment([chunk("a.ts", "High"), chunk("b.ts", "Low")], REACTIONS);
+    const lowLine = out.split("\n").find((l) => l.includes("lower-risk")) ?? "";
+    expect(lowLine).not.toContain("👍");
+  });
+
+  it("renders no affordance when reactions are not configured", () => {
+    const withReactions = renderComment([chunk("a.ts", "High")], REACTIONS);
+    const without = renderComment([chunk("a.ts", "High")]);
+    expect(without).not.toContain("👍");
+    expect(without).not.toContain("/reactions?");
+    // Byte-identical to the pre-#3 behavior when no options are passed.
+    expect(without.length).toBeLessThan(withReactions.length);
   });
 });

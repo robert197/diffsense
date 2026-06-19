@@ -122,3 +122,77 @@ describe("ingress /webhook (R2)", () => {
     expect(enqueue).not.toHaveBeenCalled();
   });
 });
+
+describe("ingress /reactions (R3)", () => {
+  const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {});
+  const validQuery = "owner=octo-org&repo=demo&pr=42&fp=abc123def4567890&tier=High&s=up";
+
+  it("records a valid reaction and returns 200", async () => {
+    const recordReaction = vi.fn(async () => {});
+    const app = createServer({ webhookSecret: SECRET, enqueue, recordReaction });
+
+    const res = await app.request(`/reactions?${validQuery}`);
+
+    expect(res.status).toBe(200);
+    expect(recordReaction).toHaveBeenCalledOnce();
+    expect(recordReaction).toHaveBeenCalledWith({
+      owner: "octo-org",
+      repo: "demo",
+      prNumber: 42,
+      fingerprint: "abc123def4567890",
+      tier: "High",
+      sentiment: "up",
+    });
+  });
+
+  it("rejects an invalid sentiment with 400 and does not record", async () => {
+    const recordReaction = vi.fn(async () => {});
+    const app = createServer({ webhookSecret: SECRET, enqueue, recordReaction });
+
+    const res = await app.request("/reactions?owner=o&repo=r&pr=1&fp=x&tier=High&s=love");
+
+    expect(res.status).toBe(400);
+    expect(recordReaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown tier with 400", async () => {
+    const recordReaction = vi.fn(async () => {});
+    const app = createServer({ webhookSecret: SECRET, enqueue, recordReaction });
+
+    const res = await app.request("/reactions?owner=o&repo=r&pr=1&fp=x&tier=Critical&s=up");
+
+    expect(res.status).toBe(400);
+    expect(recordReaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects a missing or empty pr with 400", async () => {
+    const recordReaction = vi.fn(async () => {});
+    const app = createServer({ webhookSecret: SECRET, enqueue, recordReaction });
+
+    const missing = await app.request("/reactions?owner=o&repo=r&fp=x&tier=High&s=up");
+    const empty = await app.request("/reactions?owner=o&repo=r&pr=&fp=x&tier=High&s=up");
+
+    expect(missing.status).toBe(400);
+    expect(empty.status).toBe(400);
+    expect(recordReaction).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when reactions are not wired", async () => {
+    const app = createServer({ webhookSecret: SECRET, enqueue });
+
+    const res = await app.request(`/reactions?${validQuery}`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 503 when recording fails", async () => {
+    const recordReaction = vi.fn(async () => {
+      throw new Error("db down");
+    });
+    const app = createServer({ webhookSecret: SECRET, enqueue, recordReaction });
+
+    const res = await app.request(`/reactions?${validQuery}`);
+
+    expect(res.status).toBe(503);
+  });
+});
