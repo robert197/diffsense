@@ -20,4 +20,7 @@ COPY . .
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 EXPOSE 3000 3001
+# Drop from root: the public serve/worker/web roles run as the unprivileged
+# `node` user that ships with the base image.
+USER node
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

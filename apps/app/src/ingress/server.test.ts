@@ -98,15 +98,14 @@ describe("ingress /webhook (R2)", () => {
     expect(res.status).toBe(503);
   });
 
-  it("returns 413 when the body exceeds the size cap", async () => {
+  it("returns 413 when the actual body exceeds the size cap", async () => {
     const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {});
     const app = createServer({ webhookSecret: SECRET, enqueue });
-    const body = JSON.stringify(openedFixture);
+    // Oversized body with no honest content-length: the cap must hold on the
+    // bytes actually read, not on the header.
+    const body = "x".repeat(6_000_000);
 
-    const res = await post(app, body, {
-      ...baseHeaders(body),
-      "content-length": String(6_000_000),
-    });
+    const res = await post(app, body, baseHeaders(body));
 
     expect(res.status).toBe(413);
     expect(enqueue).not.toHaveBeenCalled();

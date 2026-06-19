@@ -18,6 +18,40 @@ interface PullRequestPayload {
 }
 
 /**
+ * Read a request body as text, aborting once `maxBytes` is exceeded. Unlike
+ * `Request.text()`, this caps the actual bytes pulled from the stream, so a
+ * request with no (or a lying) content-length cannot buffer unbounded memory.
+ * Throws once the cap is passed.
+ */
+async function readBodyCapped(req: Request, maxBytes: number): Promise<string> {
+  if (!req.body) return "";
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error("payload too large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(merged);
+}
+
+/**
  * Hono ingress. Verifies the webhook HMAC signature (KTD3), narrows to
  * `pull_request` `opened`/`synchronize`, enqueues a serializable `PrRef`
  * (KTD4), and acks 202 fast. Signature failures → 401. The producer is
@@ -35,13 +69,15 @@ export function createServer({ webhookSecret, enqueue }: IngressDeps): Hono {
     const name = c.req.header("x-github-event");
 
     // Cap the unauthenticated body read on this public endpoint (DoS guard).
-    // GitHub caps webhook payloads at ~25MB; reject well below that.
-    const contentLength = Number(c.req.header("content-length") ?? 0);
-    if (contentLength > MAX_BODY_BYTES) {
+    // GitHub caps webhook payloads at ~25MB; reject well below that. Enforce on
+    // the actual bytes read, not just content-length: a request that omits the
+    // header or sends chunked would otherwise buffer an unbounded payload.
+    let body: string;
+    try {
+      body = await readBodyCapped(c.req.raw, MAX_BODY_BYTES);
+    } catch {
       return c.json({ error: "payload too large" }, 413);
     }
-
-    const body = await c.req.text();
 
     if (!signature || !id || !name) {
       return c.json({ error: "missing webhook headers" }, 400);
