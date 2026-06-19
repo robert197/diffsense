@@ -2,6 +2,7 @@ export { countHunks } from "./diff/countHunks.js";
 export { type DemotionReason, classifyDemotion } from "./diff/demote.js";
 export type { CodeReference, CodeSearch } from "./ports/codeSearch.js";
 export type { ConventionStore, RepoRef } from "./ports/conventionStore.js";
+export type { CostStore, PrCostRecord } from "./ports/costStore.js";
 export type { FingerprintCache } from "./ports/fingerprintCache.js";
 export type {
   LLMProvider,
@@ -21,7 +22,26 @@ export {
   type RiskCategory,
   type Tier,
 } from "./rank/rankHunks.js";
-export { type ReactionOptions, renderComment } from "./render/renderComment.js";
+export {
+  type CostComputation,
+  type CostPrRef,
+  type ModelRate,
+  type RateTable,
+  type RecordCostPorts,
+  computeCost,
+  recordCost,
+} from "./cost/recordCost.js";
+export {
+  type ReactionOptions,
+  type ReactionTier,
+  reactionAffordance,
+} from "./render/reactionLink.js";
+export {
+  type CommentFinding,
+  type RenderCommentOptions,
+  renderComment,
+} from "./render/renderComment.js";
+export { MAX_LISTED, renderRankedComment } from "./render/renderRankedComment.js";
 export { fingerprintChunk } from "./review/fingerprint.js";
 export {
   type ReviewChunk,
@@ -52,6 +72,12 @@ export {
   type RiskPosition,
   RiskPositionSchema,
 } from "./schemas/portfolio.js";
+export {
+  type ModelUsage,
+  ModelUsageSchema,
+  type PrUsage,
+  PrUsageSchema,
+} from "./schemas/cost.js";
 export { type ChunkReaction, ChunkReactionSchema } from "./schemas/reaction.js";
 export {
   type VerificationVerdict,

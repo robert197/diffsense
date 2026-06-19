@@ -1,110 +1,140 @@
-import type { RankedChunk } from "../rank/rankHunks.js";
+import type { RiskRating } from "../schemas/chunkReview.js";
+import type { Portfolio } from "../schemas/portfolio.js";
+import type { VerificationVerdict } from "../schemas/verification.js";
+import { type ReactionOptions, type ReactionTier, reactionAffordance } from "./reactionLink.js";
+import { MAX_LISTED } from "./renderRankedComment.js";
+
+export type { ReactionOptions } from "./reactionLink.js";
 
 /**
- * Optional reaction affordance config. When both fields are present, each
- * flagged (High/Medium) chunk gets a one-click 👍/👎 link pointing at the
- * diffsense ingress, so a reviewer can mark a flag as a real catch or noise
- * without any separate instrumentation (issue #3). Absent → the comment renders
- * exactly as before, so the worker never hard-depends on a public URL.
+ * The enriched reviewer comment (issue #12, docs/ARCHITECTURE.md §2). Pure, no
+ * I/O — `renderComment(portfolio, findings)` turns the PR-level synthesis (#11)
+ * and the verified per-chunk findings (#9) into the single advisory comment the
+ * worker upserts in place.
+ *
+ * It leads with the risk portfolio (overview, intent coverage, named risk
+ * positions), then the ranked "review these first" findings — each with a deep
+ * link to the hunk, an explanation excerpt, and its verification verdict — and a
+ * 👍/👎 affordance per finding so the reviewer can mark a catch or noise without
+ * leaving GitHub. Tone is strictly advisory: it never blocks, approves, or
+ * otherwise touches the merge decision (STRATEGY.md — advisory until trust is
+ * earned). The hidden idempotency marker is added by the github adapter.
  */
-export interface ReactionOptions {
-  /** Public base URL of the diffsense ingress (e.g. https://diffsense.example). */
-  reactionBaseUrl: string;
-  pr: { owner: string; repo: string; prNumber: number };
+
+/** One verified finding as the comment needs it — render concern, not the upstream shape. */
+export interface CommentFinding {
+  /** File the finding's chunk belongs to. */
+  file: string;
+  /** Line the deep link points at. */
+  line: number;
+  /** URL into the PR Files-changed view, anchored at the hunk. */
+  deepLink: string;
+  /** The finding's risk rating — drives ordering and the reaction link's tier. */
+  rating: RiskRating;
+  /** Plain-language explanation of the change; excerpted in the comment. */
+  explanation: string;
+  /** The verification verdict the finding survived with — its proof (#9). */
+  verdict: VerificationVerdict;
+  /** Structural fingerprint — the reaction link's stable key. */
+  fingerprint: string;
 }
 
-/**
- * Hard cap on how many flagged (High/Medium) chunks the comment lists, however
- * many the ranking produced. The product's whole premise is *directing finite
- * attention to the few changes that matter* (STRATEGY.md) — on a 150-file PR the
- * percentile tiers can mark dozens "High", and a 80-item comment is just the
- * file-order firehose again. The top slice is the deterministic margin guard.
- */
-export const MAX_LISTED = 10;
+export interface RenderCommentOptions {
+  /** Enables the 👍/👎 reaction links per finding. Absent → no affordance. */
+  reactions?: ReactionOptions;
+  /** Link to the hosted review view (issue #13). Absent → no link line. */
+  reviewUrl?: string;
+}
 
-/**
- * Render the advisory PR comment from ranked hunks — pure, no I/O.
- *
- * The comment points the reviewer at the riskiest changes first (High, then
- * Medium), each with a deep link, a one-line reason, and its tier. The Low
- * remainder collapses to a single line. Tone is strictly advisory: it never
- * blocks, approves, or otherwise touches the merge decision (STRATEGY.md — the
- * product stays advisory until trust is earned). The hidden idempotency marker
- * is added by the github adapter, not here.
- */
-export function renderComment(rankedChunks: RankedChunk[], reactions?: ReactionOptions): string {
-  const header = [
-    "### diffsense — review these first",
+/** Longest an explanation/rationale excerpt runs before it is trimmed to a clause. */
+const EXCERPT_MAX = 200;
+
+/** Ordering for the "review first" list — highest risk first, input order within. */
+const RATING_ORDER: Record<RiskRating, number> = { high: 0, medium: 1, low: 2 };
+
+export function renderComment(
+  portfolio: Portfolio,
+  findings: CommentFinding[],
+  options: RenderCommentOptions = {},
+): string {
+  const lines = [
+    "### diffsense — risk portfolio",
     "",
-    "Ranked by structural risk so you can spend attention where it counts. This is advisory: a suggested reading order, not a verdict on the PR.",
+    portfolio.overview,
+    "",
+    `**Intent coverage:** ${portfolio.intentCoverage}`,
   ];
 
-  if (rankedChunks.length === 0) {
-    return [...header, "", "No rankable changes in this PR."].join("\n");
+  if (portfolio.positions.length > 0) {
+    lines.push("", "**Risk positions**");
+    for (const position of portfolio.positions) {
+      lines.push(
+        `- **[${displayRating(position.severity)}]** ${position.title} — ${position.detail}`,
+      );
+    }
   }
 
-  const high = rankedChunks.filter((c) => c.tier === "High");
-  const medium = rankedChunks.filter((c) => c.tier === "Medium");
-  const lowCount = rankedChunks.filter((c) => c.tier === "Low").length;
-
-  // `rankedChunks` is globally score-ordered, so [...high, ...medium] is already
-  // highest-first; the top MAX_LISTED is the attention budget the reviewer gets.
-  const flagged = [...high, ...medium];
-  const shown = flagged.slice(0, MAX_LISTED);
-  const shownHigh = shown.filter((c) => c.tier === "High");
-  const shownMedium = shown.filter((c) => c.tier === "Medium");
-  const hiddenFlagged = flagged.length - shown.length;
-
-  const lines = [...header];
-
-  if (shownHigh.length > 0) {
-    lines.push("", "**High**", ...shownHigh.map((c) => renderItem(c, reactions)));
-  }
-  if (shownMedium.length > 0) {
-    lines.push("", "**Medium**", ...shownMedium.map((c) => renderItem(c, reactions)));
+  lines.push("", "**Review these first**");
+  if (findings.length === 0) {
+    lines.push("Nothing survived verification. No findings to review first.");
+  } else {
+    const ordered = [...findings].sort((a, b) => RATING_ORDER[a.rating] - RATING_ORDER[b.rating]);
+    const shown = ordered.slice(0, MAX_LISTED);
+    shown.forEach((finding, i) => lines.push(...renderFinding(finding, i + 1, options.reactions)));
+    const hidden = ordered.length - shown.length;
+    if (hidden > 0) {
+      const plural = hidden === 1 ? "finding" : "findings";
+      lines.push(
+        "",
+        `Showing the top ${shown.length} by risk. Plus ${hidden} more ${plural}, not listed.`,
+      );
+    }
   }
 
-  if (hiddenFlagged > 0) {
-    // Some flagged chunks were over the cap — be explicit that the list is the
-    // top slice, not the whole ranking, and fold the Low remainder in.
-    const more = hiddenFlagged + lowCount;
-    const plural = more === 1 ? "change" : "changes";
-    lines.push(
-      "",
-      `Showing the top ${shown.length} by risk. Plus ${more} more ${plural} ranked lower, not listed.`,
-    );
-  } else if (lowCount > 0) {
-    const plural = lowCount === 1 ? "hunk" : "hunks";
-    lines.push("", `Plus ${lowCount} lower-risk ${plural} not listed.`);
+  if (options.reviewUrl) {
+    lines.push("", `[Open the full review in diffsense →](${options.reviewUrl})`);
   }
+
+  lines.push(
+    "",
+    "Advisory only: a suggested reading order and risk summary, not a verdict on the PR.",
+  );
 
   return lines.join("\n");
 }
 
-function renderItem(chunk: RankedChunk, reactions?: ReactionOptions): string {
-  const base = `- **[${chunk.tier}]** [${chunk.file}:${chunk.line}](${chunk.deepLink}) — ${chunk.reason}`;
-  return reactions ? `${base} ${reactionAffordance(chunk, reactions)}` : base;
+function renderFinding(finding: CommentFinding, n: number, reactions?: ReactionOptions): string[] {
+  const head = `${n}. **[${displayRating(finding.rating)}]** [${finding.file}:${finding.line}](${finding.deepLink}) — ${excerpt(finding.explanation)}`;
+  const verdictLine = `   - Verification: ${verdictSummary(finding.verdict)}`;
+  const lines = [head, verdictLine];
+  if (reactions) {
+    lines.push(
+      `   - ${reactionAffordance(reactions, finding.fingerprint, displayRating(finding.rating))}`,
+    );
+  }
+  return lines;
 }
 
-/** `[👍](url) / [👎](url)` linking to the reaction endpoint for this chunk. */
-function reactionAffordance(chunk: RankedChunk, reactions: ReactionOptions): string {
-  const up = reactionUrl(chunk, reactions, "up");
-  const down = reactionUrl(chunk, reactions, "down");
-  return `[👍](${up}) / [👎](${down})`;
+/** How a finding's verdict reads in the comment — survivors carry their proof (#9). */
+function verdictSummary(verdict: VerificationVerdict): string {
+  const status = verdict.refuted
+    ? "refuted in the verification pass"
+    : "held up under an independent verification challenge";
+  return `${status}. ${excerpt(verdict.rationale)}`;
 }
 
-function reactionUrl(
-  chunk: RankedChunk,
-  { reactionBaseUrl, pr }: ReactionOptions,
-  sentiment: "up" | "down",
-): string {
-  const params = new URLSearchParams({
-    owner: pr.owner,
-    repo: pr.repo,
-    pr: String(pr.prNumber),
-    fp: chunk.fingerprint,
-    tier: chunk.tier,
-    s: sentiment,
-  });
-  return `${reactionBaseUrl.replace(/\/$/, "")}/reactions?${params.toString()}`;
+/** "high" → "High": display + the capitalized tier the reaction endpoint records. */
+function displayRating(rating: RiskRating): ReactionTier {
+  return (rating.charAt(0).toUpperCase() + rating.slice(1)) as ReactionTier;
+}
+
+/** First line, trimmed to a whole word under EXCERPT_MAX, with an ellipsis when cut. */
+function excerpt(text: string): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  if (oneLine.length <= EXCERPT_MAX) {
+    return oneLine;
+  }
+  const cut = oneLine.slice(0, EXCERPT_MAX);
+  const lastSpace = cut.lastIndexOf(" ");
+  return `${(lastSpace > 0 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
 }
