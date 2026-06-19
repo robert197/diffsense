@@ -3,6 +3,7 @@ import {
   DEFAULT_REVIEW_MODEL,
   DEFAULT_SYNTHESIS_MODEL,
   buildReviewPrompt,
+  buildSynthesisPrompt,
   buildVerifyPrompt,
   createReviewProvider,
   resolveModelConfig,
@@ -49,6 +50,7 @@ describe("createReviewProvider", () => {
       const provider = createReviewProvider({ LLM_PROVIDER });
       expect(typeof provider.reviewChunk).toBe("function");
       expect(typeof provider.verifyFinding).toBe("function");
+      expect(typeof provider.synthesize).toBe("function");
     }
   });
 
@@ -100,5 +102,42 @@ describe("buildVerifyPrompt", () => {
     });
     expect(prompt).toContain("Claims to refute:");
     expect(prompt).toContain("(none)");
+  });
+});
+
+describe("buildSynthesisPrompt", () => {
+  const review = {
+    explanation: "signature change with no call-site update",
+    claims: [{ claim: "callers break", evidence: "src/api.ts:10" }],
+    rating: "high" as const,
+    reasons: ["API boundary"],
+  };
+
+  it("includes the intent, each finding with its chunk ref, and the scope assessment", () => {
+    const prompt = buildSynthesisPrompt({
+      findings: [{ chunkRef: "src/api.ts", file: "src/api.ts", rating: "high", review }],
+      scope: {
+        withinIntent: false,
+        findings: [{ description: "adds a DB column", files: ["src/schema.ts"] }],
+      },
+      intent: { title: "Refactor auth", body: "rename only" },
+    });
+    expect(prompt).toContain("title: Refactor auth");
+    expect(prompt).toContain("body: rename only");
+    expect(prompt).toContain("chunk ref: src/api.ts");
+    expect(prompt).toContain("signature change with no call-site update");
+    expect(prompt).toContain("callers break (evidence: src/api.ts:10)");
+    expect(prompt).toContain("adds a DB column — files: src/schema.ts");
+  });
+
+  it("notes when nothing survived and the diff stays on scope", () => {
+    const prompt = buildSynthesisPrompt({
+      findings: [],
+      scope: { withinIntent: true, findings: [] },
+      intent: { title: "Tidy up", body: "" },
+    });
+    expect(prompt).toContain("(none survived verification)");
+    expect(prompt).toContain("the diff stays within its stated intent: true");
+    expect(prompt).toContain("body: (empty)");
   });
 });
