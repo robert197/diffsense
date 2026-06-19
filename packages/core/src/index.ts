@@ -7,6 +7,7 @@ export type {
   LLMProvider,
   ReviewModelClass,
   ReviewRequest,
+  VerifyRequest,
 } from "./ports/llmProvider.js";
 export type { LineRange, PrIntent, RepoReader } from "./ports/repoReader.js";
 export type { ReactionStore } from "./ports/reactionStore.js";
@@ -44,3 +45,14 @@ export {
   RiskRating,
 } from "./schemas/chunkReview.js";
 export { type ChunkReaction, ChunkReactionSchema } from "./schemas/reaction.js";
+export {
+  type VerificationVerdict,
+  VerificationVerdictSchema,
+} from "./schemas/verification.js";
+export {
+  type Finding,
+  type VerifiedFinding,
+  type VerifyPorts,
+  verifyFinding,
+  verifyFindings,
+} from "./verify/verifyFinding.js";

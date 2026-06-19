@@ -6,6 +6,8 @@ import {
   type LLMProvider,
   type ReviewChunk,
   type ReviewRequest,
+  VerificationVerdictSchema,
+  type VerifyRequest,
 } from "@diffsense/core";
 import { type LanguageModel, Output, generateText, stepCountIs, tool } from "ai";
 
@@ -101,10 +103,48 @@ export function buildReviewPrompt(chunk: ReviewChunk): string {
   ].join("\n");
 }
 
+/** System prompt: the adversarial verifier, prompted to refute (issue #9, §3). */
+export const VERIFY_SYSTEM_PROMPT = `You are an independent verifier. A first reviewer flagged a risk in one changed chunk of a pull request. Your job is to refute it.
+
+Argue, from the diff and the finding's own evidence, why the risk does not actually hold — for example the value is guarded upstream, the path is unreachable, the claim misreads the code, or the change is safe in context. A reviewer disengages from a tool that cries wolf, so a finding only survives if it withstands a genuine attempt to break it.
+
+Return:
+- refuted: true if the finding does not hold up (the refutation succeeds), false if the risk is real and survives the challenge.
+- rationale: the refutation argument when refuted; when the finding survives, why the challenge fails.
+
+Be skeptical but honest. Do not refute a real bug just to dismiss it; do not uphold a finding the diff clearly disproves.`;
+
+/** The per-finding user prompt — the finding to challenge plus its diff context. */
+export function buildVerifyPrompt({ review, chunk }: VerifyRequest): string {
+  const claims = review.claims.length
+    ? review.claims.map((c, i) => `${i + 1}. ${c.claim}\n   evidence: ${c.evidence}`).join("\n")
+    : "(none)";
+  return [
+    `File: ${chunk.file}`,
+    `Structural risk tier: ${chunk.tier}`,
+    `Finding rating: ${review.rating}`,
+    "",
+    `Finding: ${review.explanation}`,
+    "",
+    "Claims to refute:",
+    claims,
+    "",
+    "Stated reasons:",
+    ...review.reasons.map((r) => `- ${r}`),
+    "",
+    "Diff hunk the finding is about:",
+    "```diff",
+    chunk.patch,
+    "```",
+  ].join("\n");
+}
+
 /**
  * Construct the `LLMProvider`. Provider + models come from env; each
  * `reviewChunk` call routes to the model class the deterministic shell chose,
  * runs the bounded tool loop, and returns a Zod-validated `ChunkReview`.
+ * `verifyFinding` is a single structured call (no tool loop, §3) that returns a
+ * Zod-validated `VerificationVerdict`.
  */
 export function createReviewProvider(env: NodeJS.ProcessEnv = process.env): LLMProvider {
   const config = resolveModelConfig(env);
@@ -133,6 +173,20 @@ export function createReviewProvider(env: NodeJS.ProcessEnv = process.env): LLMP
         tools,
         stopWhen: stepCountIs(REVIEW_STEP_BUDGET),
         output: Output.object({ schema: ChunkReviewSchema }),
+      });
+
+      return output;
+    },
+
+    async verifyFinding(request: VerifyRequest) {
+      const { output } = await generateText({
+        // Verify runs on the review-class model: independence comes from the
+        // refutation prompt and a separate call, not a stronger tier, and the
+        // context is already in hand (§3). Keeps the precision pass cost-bounded.
+        model: model(config.reviewModel),
+        system: VERIFY_SYSTEM_PROMPT,
+        prompt: buildVerifyPrompt(request),
+        output: Output.object({ schema: VerificationVerdictSchema }),
       });
 
       return output;
