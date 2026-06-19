@@ -29,6 +29,13 @@
       "when": 1782086400000,
       "tag": "0003_fingerprints",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1782172800000,
+      "tag": "0004_costs",
+      "breakpoints": true
     }
   ]
 }

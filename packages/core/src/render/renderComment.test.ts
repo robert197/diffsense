@@ -1,148 +1,161 @@
 import { describe, expect, it } from "vitest";
-import type { RankedChunk, Tier } from "../rank/rankHunks.js";
-import { MAX_LISTED, type ReactionOptions, renderComment } from "./renderComment.js";
-
-function chunk(file: string, tier: Tier, reason = "Small change (1 lines)"): RankedChunk {
-  return {
-    file,
-    line: 10,
-    side: "R",
-    added: 1,
-    deleted: 0,
-    score: 1,
-    tier,
-    reason,
-    deepLink: "https://github.com/o/r/pull/1/files#diff-abcR10",
-    fingerprint: `fp-${file}`,
-    signals: {
-      sizeScore: 1,
-      riskPath: false,
-      riskPathLabel: null,
-      apiBoundary: false,
-      missingTestDelta: false,
-      demoted: false,
-      demotionReason: null,
-    },
-  };
-}
+import type { Portfolio } from "../schemas/portfolio.js";
+import type { ReactionOptions } from "./reactionLink.js";
+import { type CommentFinding, renderComment } from "./renderComment.js";
 
 const REACTIONS: ReactionOptions = {
   reactionBaseUrl: "https://diffsense.example",
-  pr: { owner: "o", repo: "r", prNumber: 1 },
+  pr: { owner: "octo-org", repo: "demo", prNumber: 42 },
 };
+
+const REVIEW_URL = "https://diffsense.example/r/octo-org/demo/42";
 
 const NO_MERGE_WORDS = /\b(block|approve|approved|lgtm|request changes|merge)\b/i;
 
-describe("renderComment (R3, R4)", () => {
-  it("lists High and Medium items with link, reason, and tier; collapses Low to one line", () => {
-    const out = renderComment([
-      chunk("src/auth/login.ts", "High", "Large change (60 lines), in a auth path"),
-      chunk("src/api/users.ts", "Medium", "Medium change (20 lines), touches exported API"),
-      chunk("src/lib/a.ts", "Low"),
-      chunk("src/lib/b.ts", "Low"),
-    ]);
+const PORTFOLIO: Portfolio = {
+  positions: [
+    {
+      title: "1 unverified auth-boundary change",
+      detail: "Session lookup no longer guards a null user.",
+      severity: "high",
+      chunks: ["src/auth/session.ts"],
+    },
+    {
+      title: "1 undeclared data-model edit",
+      detail: "Adds a nullable column not mentioned in the PR description.",
+      severity: "medium",
+      chunks: ["src/db/schema.ts"],
+    },
+  ],
+  intentCoverage: "Over scope: the diff adds a DB column the description does not mention.",
+  overview: "Two risk positions to look at: an auth-boundary change and an undeclared schema edit.",
+};
 
-    expect(out).toContain("**[High]**");
-    expect(out).toContain("**[Medium]**");
+function finding(over: Partial<CommentFinding> = {}): CommentFinding {
+  return {
+    file: "src/auth/session.ts",
+    line: 21,
+    deepLink: "https://github.com/octo-org/demo/pull/42/files#diff-abcR21",
+    rating: "high",
+    explanation: "The session lookup dereferences the user without a null guard.",
+    verdict: {
+      refuted: false,
+      rationale: "The upstream caller can pass an unauthenticated request.",
+    },
+    fingerprint: "fp-session",
+    ...over,
+  };
+}
+
+describe("renderComment (issue #12)", () => {
+  it("leads with the portfolio overview, intent coverage, and named risk positions", () => {
+    const out = renderComment(PORTFOLIO, [finding()]);
+    const overviewIdx = out.indexOf("Two risk positions to look at");
+    const positionsIdx = out.indexOf("**Risk positions**");
+    const findingsIdx = out.indexOf("**Review these first**");
+
+    expect(overviewIdx).toBeGreaterThanOrEqual(0);
+    expect(out).toContain("**Intent coverage:** Over scope");
+    expect(out).toContain("1 unverified auth-boundary change");
+    expect(out).toContain("Session lookup no longer guards a null user.");
+    // Portfolio leads; the ranked findings follow it.
+    expect(overviewIdx).toBeLessThan(positionsIdx);
+    expect(positionsIdx).toBeLessThan(findingsIdx);
+  });
+
+  it("renders each finding with a deep link, explanation excerpt, and its verdict", () => {
+    const out = renderComment(PORTFOLIO, [finding()]);
     expect(out).toContain(
-      "[src/auth/login.ts:10](https://github.com/o/r/pull/1/files#diff-abcR10)",
+      "[src/auth/session.ts:21](https://github.com/octo-org/demo/pull/42/files#diff-abcR21)",
     );
-    expect(out).toContain("in a auth path");
-    expect(out).toContain("touches exported API");
-    // Low remainder collapses to exactly one summary line naming the count.
-    expect(out).toContain("Plus 2 lower-risk hunks not listed.");
-    expect(out).not.toContain("**[Low]**");
+    expect(out).toContain("dereferences the user without a null guard");
+    expect(out).toContain("held up under an independent verification challenge");
+    expect(out).toContain("The upstream caller can pass an unauthenticated request.");
   });
 
-  it("uses the singular for a single Low hunk", () => {
-    const out = renderComment([chunk("a.ts", "High"), chunk("b.ts", "Low")]);
-    expect(out).toContain("Plus 1 lower-risk hunk not listed.");
-  });
-
-  it("renders header and items even with no Low remainder", () => {
-    const out = renderComment([chunk("a.ts", "High")]);
-    expect(out).toContain("diffsense");
-    expect(out).toContain("**[High]**");
-    expect(out).not.toContain("lower-risk");
-  });
-
-  it("handles a tier mix with no High without throwing", () => {
-    const out = renderComment([chunk("a.ts", "Medium"), chunk("b.ts", "Low")]);
-    expect(out).toContain("**[Medium]**");
-    expect(out).toContain("Plus 1 lower-risk hunk not listed.");
-  });
-
-  it("renders an advisory message for an empty ranking", () => {
-    const out = renderComment([]);
-    expect(out).toContain("No rankable changes");
-    expect(out).not.toContain("**[");
-  });
-
-  it("orders High before Medium", () => {
-    const out = renderComment([chunk("med.ts", "Medium"), chunk("high.ts", "High")]);
-    expect(out.indexOf("high.ts")).toBeLessThan(out.indexOf("med.ts"));
-  });
-
-  it(`caps the listed flagged chunks at ${MAX_LISTED} on a large PR`, () => {
-    const many = Array.from({ length: 40 }, (_, i) => chunk(`src/auth/f${i}.ts`, "High"));
-    const out = renderComment([...many, chunk("src/lib/low.ts", "Low")]);
-    const listed = out.split("\n").filter((l) => l.startsWith("- **[")).length;
-    expect(listed).toBe(MAX_LISTED);
-    // The remainder line accounts for hidden flagged chunks + the Low hunk.
-    expect(out).toContain(`Showing the top ${MAX_LISTED} by risk.`);
-    expect(out).toContain(`Plus ${40 - MAX_LISTED + 1} more changes ranked lower`);
-  });
-
-  it("does not cap when flagged chunks fit within the budget", () => {
-    const out = renderComment([chunk("a.ts", "High"), chunk("b.ts", "Medium")]);
-    expect(out).not.toContain("Showing the top");
-    expect(out.split("\n").filter((l) => l.startsWith("- **[")).length).toBe(2);
-  });
-
-  it("never uses merge-gating language (advisory only)", () => {
-    const out = renderComment([
-      chunk("src/auth/login.ts", "High", "Large change (60 lines), in a auth path"),
-      chunk("src/lib/a.ts", "Low"),
+  it("shows a refuted verdict distinctly", () => {
+    const out = renderComment(PORTFOLIO, [
+      finding({
+        verdict: { refuted: true, rationale: "The value is guarded two frames up." },
+      }),
     ]);
-    expect(out).not.toMatch(NO_MERGE_WORDS);
-    expect(renderComment([])).not.toMatch(NO_MERGE_WORDS);
+    expect(out).toContain("refuted in the verification pass");
+    expect(out).toContain("The value is guarded two frames up.");
   });
-});
 
-describe("renderComment — reaction affordance (R3)", () => {
-  it("adds 👍/👎 links to each flagged chunk when reactions are configured", () => {
-    const out = renderComment(
-      [chunk("src/auth/login.ts", "High"), chunk("src/api/users.ts", "Medium")],
-      REACTIONS,
-    );
+  it("links to the hosted review view when a URL is given", () => {
+    const out = renderComment(PORTFOLIO, [finding()], { reviewUrl: REVIEW_URL });
+    expect(out).toContain(`[Open the full review in diffsense →](${REVIEW_URL})`);
+  });
+
+  it("omits the review-view link when no URL is given", () => {
+    const out = renderComment(PORTFOLIO, [finding()]);
+    expect(out).not.toContain("Open the full review");
+  });
+
+  it("exposes a 👍/👎 per finding pointing at the reaction endpoint", () => {
+    const out = renderComment(PORTFOLIO, [finding()], { reactions: REACTIONS });
     expect(out).toContain("👍");
     expect(out).toContain("👎");
     expect(out).toContain("https://diffsense.example/reactions?");
+    expect(out).toContain("fp=fp-session");
+    // Lowercase rating is recorded with the capitalized tier the schema expects.
+    expect(out).toContain("tier=High");
     expect(out).toContain("s=up");
     expect(out).toContain("s=down");
   });
 
-  it("encodes the chunk fingerprint and tier in the reaction links", () => {
-    const out = renderComment([chunk("src/auth/login.ts", "High")], REACTIONS);
-    expect(out).toContain("fp=fp-src%2Fauth%2Flogin.ts");
-    expect(out).toContain("tier=High");
-    expect(out).toContain("owner=o");
-    expect(out).toContain("repo=r");
-    expect(out).toContain("pr=1");
-  });
-
-  it("does not add an affordance to the Low remainder line", () => {
-    const out = renderComment([chunk("a.ts", "High"), chunk("b.ts", "Low")], REACTIONS);
-    const lowLine = out.split("\n").find((l) => l.includes("lower-risk")) ?? "";
-    expect(lowLine).not.toContain("👍");
-  });
-
   it("renders no affordance when reactions are not configured", () => {
-    const withReactions = renderComment([chunk("a.ts", "High")], REACTIONS);
-    const without = renderComment([chunk("a.ts", "High")]);
-    expect(without).not.toContain("👍");
-    expect(without).not.toContain("/reactions?");
-    // Byte-identical to the pre-#3 behavior when no options are passed.
-    expect(without.length).toBeLessThan(withReactions.length);
+    const out = renderComment(PORTFOLIO, [finding()]);
+    expect(out).not.toContain("👍");
+    expect(out).not.toContain("/reactions?");
+  });
+
+  it("orders findings highest-risk first regardless of input order", () => {
+    const out = renderComment(PORTFOLIO, [
+      finding({ file: "low.ts", rating: "low", fingerprint: "fp-low" }),
+      finding({ file: "high.ts", rating: "high", fingerprint: "fp-high" }),
+      finding({ file: "med.ts", rating: "medium", fingerprint: "fp-med" }),
+    ]);
+    expect(out.indexOf("high.ts")).toBeLessThan(out.indexOf("med.ts"));
+    expect(out.indexOf("med.ts")).toBeLessThan(out.indexOf("low.ts"));
+  });
+
+  it("truncates a long explanation to a word-boundary excerpt with an ellipsis", () => {
+    const long = `${"word ".repeat(80)}END`.trim();
+    const out = renderComment(PORTFOLIO, [finding({ explanation: long })]);
+    expect(out).toContain("…");
+    expect(out).not.toContain("END");
+  });
+
+  it("handles an empty portfolio with no findings without throwing", () => {
+    const empty: Portfolio = {
+      positions: [],
+      intentCoverage: "The change stays within its stated intent.",
+      overview: "No risks survived verification. Nothing flagged for review.",
+    };
+    const out = renderComment(empty, []);
+    expect(out).toContain("No risks survived verification");
+    expect(out).toContain("Nothing survived verification. No findings to review first.");
+    expect(out).not.toContain("**Risk positions**");
+  });
+
+  it("caps the listed findings and names the remainder", () => {
+    const many = Array.from({ length: 14 }, (_, i) =>
+      finding({ file: `f${i}.ts`, fingerprint: `fp-${i}` }),
+    );
+    const out = renderComment(PORTFOLIO, many);
+    const listed = out.split("\n").filter((l) => /^\d+\. \*\*\[/.test(l)).length;
+    expect(listed).toBe(10);
+    expect(out).toContain("Plus 4 more findings, not listed.");
+  });
+
+  it("never uses merge-gating language (advisory only)", () => {
+    const out = renderComment(PORTFOLIO, [finding()], {
+      reactions: REACTIONS,
+      reviewUrl: REVIEW_URL,
+    });
+    expect(out).not.toMatch(NO_MERGE_WORDS);
+    expect(out).toContain("Advisory only");
   });
 });

@@ -1,4 +1,14 @@
-import { integer, jsonb, pgTable, serial, text, timestamp, unique } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  integer,
+  jsonb,
+  numeric,
+  pgTable,
+  serial,
+  text,
+  timestamp,
+  unique,
+} from "drizzle-orm/pg-core";
 
 /**
  * Minimal baseline table — exists to prove the Postgres connection + Drizzle
@@ -76,3 +86,24 @@ export const fingerprints = pgTable(
     ),
   }),
 );
+
+/**
+ * Per-PR inference cost (issue #12, docs/ARCHITECTURE.md §2) — product
+ * observability. One append-only row per review run records the summed token
+ * usage, the USD cost (token usage × per-model rate), and whether the run crossed
+ * the configured cost threshold, so cost-per-PR stays observable across the
+ * PR-size distribution and across re-reviews. `CostStore` (in `core`) is the
+ * port; this is the table its Drizzle adapter inserts into.
+ */
+export const costs = pgTable("costs", {
+  id: serial("id").primaryKey(),
+  owner: text("owner").notNull(),
+  repo: text("repo").notNull(),
+  prNumber: integer("pr_number").notNull(),
+  inputTokens: integer("input_tokens").notNull(),
+  outputTokens: integer("output_tokens").notNull(),
+  /** USD cost stored as exact numeric — never a lossy float for money. */
+  costUsd: numeric("cost_usd", { precision: 12, scale: 6 }).notNull(),
+  overThreshold: boolean("over_threshold").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
