@@ -127,11 +127,29 @@ describe("ingress /reactions (R3)", () => {
   const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {});
   const validQuery = "owner=octo-org&repo=demo&pr=42&fp=abc123def4567890&tier=High&s=up";
 
-  it("records a valid reaction and returns 200", async () => {
+  const post = (query: string) =>
+    new Request(`http://localhost/reactions?${query}`, { method: "POST" });
+
+  it("does not record on GET — only renders a confirm page that POSTs", async () => {
     const recordReaction = vi.fn(async () => {});
     const app = createServer({ webhookSecret: SECRET, enqueue, recordReaction });
 
     const res = await app.request(`/reactions?${validQuery}`);
+    const html = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(recordReaction).not.toHaveBeenCalled();
+    // The button POSTs back with the same params, so prefetchers can't write.
+    expect(html).toContain('method="post"');
+    expect(html).toContain("/reactions?");
+    expect(html).toContain("pr=42");
+  });
+
+  it("records a valid reaction on POST and returns 200", async () => {
+    const recordReaction = vi.fn(async () => {});
+    const app = createServer({ webhookSecret: SECRET, enqueue, recordReaction });
+
+    const res = await app.request(post(validQuery));
 
     expect(res.status).toBe(200);
     expect(recordReaction).toHaveBeenCalledOnce();
@@ -149,7 +167,7 @@ describe("ingress /reactions (R3)", () => {
     const recordReaction = vi.fn(async () => {});
     const app = createServer({ webhookSecret: SECRET, enqueue, recordReaction });
 
-    const res = await app.request("/reactions?owner=o&repo=r&pr=1&fp=x&tier=High&s=love");
+    const res = await app.request(post("owner=o&repo=r&pr=1&fp=x&tier=High&s=love"));
 
     expect(res.status).toBe(400);
     expect(recordReaction).not.toHaveBeenCalled();
@@ -159,7 +177,7 @@ describe("ingress /reactions (R3)", () => {
     const recordReaction = vi.fn(async () => {});
     const app = createServer({ webhookSecret: SECRET, enqueue, recordReaction });
 
-    const res = await app.request("/reactions?owner=o&repo=r&pr=1&fp=x&tier=Critical&s=up");
+    const res = await app.request(post("owner=o&repo=r&pr=1&fp=x&tier=Critical&s=up"));
 
     expect(res.status).toBe(400);
     expect(recordReaction).not.toHaveBeenCalled();
@@ -169,8 +187,8 @@ describe("ingress /reactions (R3)", () => {
     const recordReaction = vi.fn(async () => {});
     const app = createServer({ webhookSecret: SECRET, enqueue, recordReaction });
 
-    const missing = await app.request("/reactions?owner=o&repo=r&fp=x&tier=High&s=up");
-    const empty = await app.request("/reactions?owner=o&repo=r&pr=&fp=x&tier=High&s=up");
+    const missing = await app.request(post("owner=o&repo=r&fp=x&tier=High&s=up"));
+    const empty = await app.request(post("owner=o&repo=r&pr=&fp=x&tier=High&s=up"));
 
     expect(missing.status).toBe(400);
     expect(empty.status).toBe(400);
@@ -180,9 +198,11 @@ describe("ingress /reactions (R3)", () => {
   it("returns 404 when reactions are not wired", async () => {
     const app = createServer({ webhookSecret: SECRET, enqueue });
 
-    const res = await app.request(`/reactions?${validQuery}`);
+    const getRes = await app.request(`/reactions?${validQuery}`);
+    const postRes = await app.request(post(validQuery));
 
-    expect(res.status).toBe(404);
+    expect(getRes.status).toBe(404);
+    expect(postRes.status).toBe(404);
   });
 
   it("returns 503 when recording fails", async () => {
@@ -191,7 +211,7 @@ describe("ingress /reactions (R3)", () => {
     });
     const app = createServer({ webhookSecret: SECRET, enqueue, recordReaction });
 
-    const res = await app.request(`/reactions?${validQuery}`);
+    const res = await app.request(post(validQuery));
 
     expect(res.status).toBe(503);
   });
