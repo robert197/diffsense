@@ -7,6 +7,8 @@ import {
   PortfolioSchema,
   type ReviewChunk,
   type ReviewRequest,
+  ScopeCreepReportSchema,
+  type ScopeRequest,
   type SynthesisRequest,
   VerificationVerdictSchema,
   type VerifyRequest,
@@ -141,6 +143,35 @@ export function buildVerifyPrompt({ review, chunk }: VerifyRequest): string {
   ].join("\n");
 }
 
+/** System prompt: map the diff to declared intent, flag the unmapped (issue #10). */
+export const SCOPE_SYSTEM_PROMPT = `You are checking a pull request for scope creep. The author declared what the PR is for; your job is to find changes that match none of that declared intent.
+
+First, read the PR title and description and list the distinct intents the author declared (for example "add rate limiting", "fix the login redirect"). Then walk the diff and map each changed region to a declared intent.
+
+A region is scope creep only when it serves none of the declared intents. Be precise — reviewers disengage from a tool that cries wolf:
+- Supporting edits that the declared work genuinely needs are in scope: new imports, types, tests, config, or call sites for the declared feature.
+- An incidental edit in an unrelated file or subsystem that no declared intent calls for is scope creep — these undeclared, drive-by changes are the highest-risk content in the PR.
+
+Return:
+- declaredIntents: the distinct intents you read from the title + description.
+- findings: one entry per changed region that matches no declared intent. Use the bare repo-relative file path (no \`a/\` or \`b/\` prefix), a plain-language summary of what the out-of-scope edit does, and the rationale for why it serves none of the declared intents. Return an empty list when every change maps to a declared intent.`;
+
+/** The per-PR user prompt — the declared intent plus the full diff to map. */
+export function buildScopePrompt({ diff, intent }: ScopeRequest): string {
+  return [
+    "PR title:",
+    intent.title,
+    "",
+    "PR description:",
+    intent.body.trim() ? intent.body : "(none)",
+    "",
+    "Full diff:",
+    "```diff",
+    diff,
+    "```",
+  ].join("\n");
+}
+
 /** System prompt: PR-level portfolio synthesis (issue #11, §3). */
 export const SYNTHESIS_SYSTEM_PROMPT = `You are a senior reviewer writing the PR-level summary. The per-chunk findings you are given already survived an independent verification pass — treat them as real risks, not noise.
 
@@ -201,8 +232,9 @@ export function buildSynthesisPrompt({ findings, scope, intent }: SynthesisReque
  * Construct the `LLMProvider`. Provider + models come from env; each
  * `reviewChunk` call routes to the model class the deterministic shell chose,
  * runs the bounded tool loop, and returns a Zod-validated `ChunkReview`.
- * `verifyFinding` and `synthesize` are single structured calls (no tool loop,
- * §3) returning a Zod-validated `VerificationVerdict` / `Portfolio`.
+ * `verifyFinding`, `detectScopeCreep`, and `synthesize` are single structured
+ * calls (no tool loop, §3) returning a Zod-validated `VerificationVerdict` /
+ * `ScopeCreepReport` / `Portfolio`.
  */
 export function createReviewProvider(env: NodeJS.ProcessEnv = process.env): LLMProvider {
   const config = resolveModelConfig(env);
@@ -245,6 +277,20 @@ export function createReviewProvider(env: NodeJS.ProcessEnv = process.env): LLMP
         system: VERIFY_SYSTEM_PROMPT,
         prompt: buildVerifyPrompt(request),
         output: Output.object({ schema: VerificationVerdictSchema }),
+      });
+
+      return output;
+    },
+
+    async detectScopeCreep(request: ScopeRequest) {
+      const { output } = await generateText({
+        // Scope-creep is a single structured call over the whole diff + intent
+        // (§3): the inputs are already in hand, so no tool loop. Runs on the
+        // review-class model to keep the pass cost-bounded.
+        model: model(config.reviewModel),
+        system: SCOPE_SYSTEM_PROMPT,
+        prompt: buildScopePrompt(request),
+        output: Output.object({ schema: ScopeCreepReportSchema }),
       });
 
       return output;

@@ -32,6 +32,7 @@ function fakeSynthesizer(portfolio: Portfolio) {
   const provider: LLMProvider = {
     reviewChunk: vi.fn(),
     verifyFinding: vi.fn(),
+    detectScopeCreep: vi.fn(),
     synthesize: vi.fn(async (request: SynthesisRequest): Promise<Portfolio> => {
       requests.push(request);
       return portfolio;

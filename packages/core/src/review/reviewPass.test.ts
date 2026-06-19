@@ -35,6 +35,9 @@ function fakeProvider(tag = "fake") {
     }),
     // The review pass never verifies or synthesizes — fail loudly if a refactor wires either in here.
     verifyFinding: vi.fn().mockRejectedValue(new Error("verifyFinding not expected in reviewPass")),
+    detectScopeCreep: vi
+      .fn()
+      .mockRejectedValue(new Error("detectScopeCreep not expected in reviewPass")),
     synthesize: vi.fn().mockRejectedValue(new Error("synthesize not expected in reviewPass")),
   };
   return { provider, requests };

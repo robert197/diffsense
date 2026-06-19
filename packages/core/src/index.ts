@@ -9,6 +9,7 @@ export type {
   LLMProvider,
   ReviewModelClass,
   ReviewRequest,
+  ScopeRequest,
   SynthesisFinding,
   SynthesisRequest,
   VerifyRequest,
@@ -44,6 +45,7 @@ export {
   renderComment,
 } from "./render/renderComment.js";
 export { MAX_LISTED, renderRankedComment } from "./render/renderRankedComment.js";
+export { type ScopeCreepPorts, detectScopeCreep } from "./scope/detectScopeCreep.js";
 export { fingerprintChunk } from "./review/fingerprint.js";
 export {
   type ReviewChunk,
@@ -91,12 +93,17 @@ export {
 } from "./schemas/cost.js";
 export { type ChunkReaction, ChunkReactionSchema } from "./schemas/reaction.js";
 export {
+  type ScopeCreepReport,
+  ScopeCreepReportSchema,
+  type ScopeFinding,
+  ScopeFindingSchema,
+} from "./schemas/scopeCreep.js";
+export {
   type VerificationVerdict,
   VerificationVerdictSchema,
 } from "./schemas/verification.js";
 export {
   type ScopeAssessment,
-  type ScopeFinding,
   type SynthesisPorts,
   synthesizePortfolio,
 } from "./synthesis/synthesizePortfolio.js";

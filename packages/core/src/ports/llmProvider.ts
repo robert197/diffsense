@@ -2,6 +2,7 @@ import type { ReviewChunk } from "../review/reviewPass.js";
 import type { AnyReviewTool } from "../review/tools.js";
 import type { ChunkReview, RiskRating } from "../schemas/chunkReview.js";
 import type { Portfolio } from "../schemas/portfolio.js";
+import type { ScopeCreepReport } from "../schemas/scopeCreep.js";
 import type { VerificationVerdict } from "../schemas/verification.js";
 import type { ScopeAssessment } from "../synthesis/synthesizePortfolio.js";
 import type { PrIntent } from "./repoReader.js";
@@ -45,6 +46,19 @@ export interface VerifyRequest {
 }
 
 /**
+ * Everything the intent / scope-creep pass needs to map a diff against the PR's
+ * declared intent (issue #10). Like verify, it is a *single structured call, not a
+ * tool loop* (docs/ARCHITECTURE.md §3): the inputs — the whole diff and the
+ * declared intent — are already in hand.
+ */
+export interface ScopeRequest {
+  /** The full unified diff of the PR. */
+  diff: string;
+  /** The PR's declared intent — title + description — to map the diff against. */
+  intent: PrIntent;
+}
+
+/**
  * One verified, surviving finding as synthesis sees it (issue #11). `chunkRef` is
  * the stable link target a portfolio position cites back to — the file the chunk
  * belongs to.
@@ -82,6 +96,12 @@ export interface LLMProvider {
    * Zod-validated `VerificationVerdict`. The precision lever (issue #9).
    */
   verifyFinding(request: VerifyRequest): Promise<VerificationVerdict>;
+  /**
+   * Map the diff against the PR's declared intent, returning a Zod-validated
+   * `ScopeCreepReport` whose findings are the regions matching no declared intent
+   * (issue #10).
+   */
+  detectScopeCreep(request: ScopeRequest): Promise<ScopeCreepReport>;
   /**
    * Synthesize the verified findings + scope assessment into a PR-level
    * `Portfolio`: named, chunk-linked risk positions, an intent-coverage summary,
