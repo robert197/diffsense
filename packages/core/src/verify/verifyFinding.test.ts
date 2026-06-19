@@ -32,6 +32,7 @@ function fakeVerifier(refute: (req: VerifyRequest) => boolean) {
       const refuted = refute(request);
       return { refuted, rationale: refuted ? "challenge succeeded" : "risk holds" };
     }),
+    detectScopeCreep: vi.fn(),
   };
   return { provider, requests };
 }
@@ -62,6 +63,7 @@ describe("verifyFindings", () => {
     const provider: LLMProvider = {
       reviewChunk: vi.fn(),
       verifyFinding: vi.fn().mockRejectedValue(new Error("provider down")),
+      detectScopeCreep: vi.fn(),
     };
 
     await expect(

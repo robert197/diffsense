@@ -35,6 +35,9 @@ function fakeProvider(tag = "fake") {
     }),
     // The review pass never verifies — fail loudly if a refactor wires it in here.
     verifyFinding: vi.fn().mockRejectedValue(new Error("verifyFinding not expected in reviewPass")),
+    detectScopeCreep: vi
+      .fn()
+      .mockRejectedValue(new Error("detectScopeCreep not expected in reviewPass")),
   };
   return { provider, requests };
 }

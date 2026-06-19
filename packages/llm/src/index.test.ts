@@ -3,6 +3,7 @@ import {
   DEFAULT_REVIEW_MODEL,
   DEFAULT_SYNTHESIS_MODEL,
   buildReviewPrompt,
+  buildScopePrompt,
   buildVerifyPrompt,
   createReviewProvider,
   resolveModelConfig,
@@ -49,6 +50,7 @@ describe("createReviewProvider", () => {
       const provider = createReviewProvider({ LLM_PROVIDER });
       expect(typeof provider.reviewChunk).toBe("function");
       expect(typeof provider.verifyFinding).toBe("function");
+      expect(typeof provider.detectScopeCreep).toBe("function");
     }
   });
 
@@ -99,6 +101,28 @@ describe("buildVerifyPrompt", () => {
       chunk: { file: "src/x.ts", tier: "Medium", patch: "+const y = 1;" },
     });
     expect(prompt).toContain("Claims to refute:");
+    expect(prompt).toContain("(none)");
+  });
+});
+
+describe("buildScopePrompt", () => {
+  it("includes the PR title, description, and the full diff", () => {
+    const prompt = buildScopePrompt({
+      diff: "diff --git a/src/auth.ts b/src/auth.ts\n+session.ttl = 0;",
+      intent: { title: "add rate limiting", body: "Add a token-bucket rate limiter." },
+    });
+    expect(prompt).toContain("PR title:");
+    expect(prompt).toContain("add rate limiting");
+    expect(prompt).toContain("Add a token-bucket rate limiter.");
+    expect(prompt).toContain("session.ttl = 0;");
+  });
+
+  it("renders '(none)' when the PR has an empty description", () => {
+    const prompt = buildScopePrompt({
+      diff: "+const x = 1;",
+      intent: { title: "tidy up", body: "   " },
+    });
+    expect(prompt).toContain("PR description:");
     expect(prompt).toContain("(none)");
   });
 });

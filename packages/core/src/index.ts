@@ -7,6 +7,7 @@ export type {
   LLMProvider,
   ReviewModelClass,
   ReviewRequest,
+  ScopeRequest,
   VerifyRequest,
 } from "./ports/llmProvider.js";
 export type { LineRange, PrIntent, RepoReader } from "./ports/repoReader.js";
@@ -20,6 +21,7 @@ export {
   type Tier,
 } from "./rank/rankHunks.js";
 export { type ReactionOptions, renderComment } from "./render/renderComment.js";
+export { type ScopeCreepPorts, detectScopeCreep } from "./scope/detectScopeCreep.js";
 export { fingerprintChunk } from "./review/fingerprint.js";
 export {
   type ReviewChunk,
@@ -45,6 +47,12 @@ export {
   RiskRating,
 } from "./schemas/chunkReview.js";
 export { type ChunkReaction, ChunkReactionSchema } from "./schemas/reaction.js";
+export {
+  type ScopeCreepReport,
+  ScopeCreepReportSchema,
+  type ScopeFinding,
+  ScopeFindingSchema,
+} from "./schemas/scopeCreep.js";
 export {
   type VerificationVerdict,
   VerificationVerdictSchema,

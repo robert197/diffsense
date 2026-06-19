@@ -1,7 +1,9 @@
 import type { ReviewChunk } from "../review/reviewPass.js";
 import type { AnyReviewTool } from "../review/tools.js";
 import type { ChunkReview } from "../schemas/chunkReview.js";
+import type { ScopeCreepReport } from "../schemas/scopeCreep.js";
 import type { VerificationVerdict } from "../schemas/verification.js";
+import type { PrIntent } from "./repoReader.js";
 
 /**
  * Port: the provider-agnostic LLM seam (docs/STACK.md "LLM provider
@@ -41,6 +43,19 @@ export interface VerifyRequest {
   chunk: ReviewChunk;
 }
 
+/**
+ * Everything the intent / scope-creep pass needs to map a diff against the PR's
+ * declared intent (issue #10). Like verify, it is a *single structured call, not a
+ * tool loop* (docs/ARCHITECTURE.md §3): the inputs — the whole diff and the
+ * declared intent — are already in hand.
+ */
+export interface ScopeRequest {
+  /** The full unified diff of the PR. */
+  diff: string;
+  /** The PR's declared intent — title + description — to map the diff against. */
+  intent: PrIntent;
+}
+
 export interface LLMProvider {
   /** Review one chunk, returning a Zod-validated `ChunkReview`. */
   reviewChunk(request: ReviewRequest): Promise<ChunkReview>;
@@ -49,4 +64,10 @@ export interface LLMProvider {
    * Zod-validated `VerificationVerdict`. The precision lever (issue #9).
    */
   verifyFinding(request: VerifyRequest): Promise<VerificationVerdict>;
+  /**
+   * Map the diff against the PR's declared intent, returning a Zod-validated
+   * `ScopeCreepReport` whose findings are the regions matching no declared intent
+   * (issue #10).
+   */
+  detectScopeCreep(request: ScopeRequest): Promise<ScopeCreepReport>;
 }
