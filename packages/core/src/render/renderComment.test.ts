@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RankedChunk, Tier } from "../rank/rankHunks.js";
-import { type ReactionOptions, renderComment } from "./renderComment.js";
+import { MAX_LISTED, type ReactionOptions, renderComment } from "./renderComment.js";
 
 function chunk(file: string, tier: Tier, reason = "Small change (1 lines)"): RankedChunk {
   return {
@@ -81,6 +81,22 @@ describe("renderComment (R3, R4)", () => {
   it("orders High before Medium", () => {
     const out = renderComment([chunk("med.ts", "Medium"), chunk("high.ts", "High")]);
     expect(out.indexOf("high.ts")).toBeLessThan(out.indexOf("med.ts"));
+  });
+
+  it(`caps the listed flagged chunks at ${MAX_LISTED} on a large PR`, () => {
+    const many = Array.from({ length: 40 }, (_, i) => chunk(`src/auth/f${i}.ts`, "High"));
+    const out = renderComment([...many, chunk("src/lib/low.ts", "Low")]);
+    const listed = out.split("\n").filter((l) => l.startsWith("- **[")).length;
+    expect(listed).toBe(MAX_LISTED);
+    // The remainder line accounts for hidden flagged chunks + the Low hunk.
+    expect(out).toContain(`Showing the top ${MAX_LISTED} by risk.`);
+    expect(out).toContain(`Plus ${40 - MAX_LISTED + 1} more changes ranked lower`);
+  });
+
+  it("does not cap when flagged chunks fit within the budget", () => {
+    const out = renderComment([chunk("a.ts", "High"), chunk("b.ts", "Medium")]);
+    expect(out).not.toContain("Showing the top");
+    expect(out.split("\n").filter((l) => l.startsWith("- **[")).length).toBe(2);
   });
 
   it("never uses merge-gating language (advisory only)", () => {

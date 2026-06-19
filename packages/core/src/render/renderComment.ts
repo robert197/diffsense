@@ -14,6 +14,15 @@ export interface ReactionOptions {
 }
 
 /**
+ * Hard cap on how many flagged (High/Medium) chunks the comment lists, however
+ * many the ranking produced. The product's whole premise is *directing finite
+ * attention to the few changes that matter* (STRATEGY.md) — on a 150-file PR the
+ * percentile tiers can mark dozens "High", and a 80-item comment is just the
+ * file-order firehose again. The top slice is the deterministic margin guard.
+ */
+export const MAX_LISTED = 10;
+
+/**
  * Render the advisory PR comment from ranked hunks — pure, no I/O.
  *
  * The comment points the reviewer at the riskiest changes first (High, then
@@ -38,15 +47,33 @@ export function renderComment(rankedChunks: RankedChunk[], reactions?: ReactionO
   const medium = rankedChunks.filter((c) => c.tier === "Medium");
   const lowCount = rankedChunks.filter((c) => c.tier === "Low").length;
 
+  // `rankedChunks` is globally score-ordered, so [...high, ...medium] is already
+  // highest-first; the top MAX_LISTED is the attention budget the reviewer gets.
+  const flagged = [...high, ...medium];
+  const shown = flagged.slice(0, MAX_LISTED);
+  const shownHigh = shown.filter((c) => c.tier === "High");
+  const shownMedium = shown.filter((c) => c.tier === "Medium");
+  const hiddenFlagged = flagged.length - shown.length;
+
   const lines = [...header];
 
-  if (high.length > 0) {
-    lines.push("", "**High**", ...high.map((c) => renderItem(c, reactions)));
+  if (shownHigh.length > 0) {
+    lines.push("", "**High**", ...shownHigh.map((c) => renderItem(c, reactions)));
   }
-  if (medium.length > 0) {
-    lines.push("", "**Medium**", ...medium.map((c) => renderItem(c, reactions)));
+  if (shownMedium.length > 0) {
+    lines.push("", "**Medium**", ...shownMedium.map((c) => renderItem(c, reactions)));
   }
-  if (lowCount > 0) {
+
+  if (hiddenFlagged > 0) {
+    // Some flagged chunks were over the cap — be explicit that the list is the
+    // top slice, not the whole ranking, and fold the Low remainder in.
+    const more = hiddenFlagged + lowCount;
+    const plural = more === 1 ? "change" : "changes";
+    lines.push(
+      "",
+      `Showing the top ${shown.length} by risk. Plus ${more} more ${plural} ranked lower, not listed.`,
+    );
+  } else if (lowCount > 0) {
     const plural = lowCount === 1 ? "hunk" : "hunks";
     lines.push("", `Plus ${lowCount} lower-risk ${plural} not listed.`);
   }

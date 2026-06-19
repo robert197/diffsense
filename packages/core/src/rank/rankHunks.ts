@@ -92,7 +92,9 @@ const RISK_PATTERNS: ReadonlyArray<readonly [RiskCategory, RegExp]> = [
   ["auth", /(auth|login|logout|session|oauth|jwt|password|credential)/i],
   ["payment", /(payment|billing|invoice|charge|stripe|paypal|checkout|subscription)/i],
   ["security", /(security|crypto|secret|sanitize|csrf|cors|encrypt|decrypt|sso)/i],
-  ["migration", /(migration|migrate|schema|\.sql$)/i],
+  // DB migrations / schema definitions — NOT a bare "schema" substring, which
+  // false-matches a frontend `src/schemas/` (Zod) dir. Anchor on real artifacts.
+  ["migration", /(migration|migrate|\.sql$|schema\.(sql|prisma|rb))/i],
   ["infra", /(infra|terraform|\.tf$|k8s|kubernetes|helm|ansible|dockerfile|docker-compose)/i],
   ["deploy", /(deploy|\.github\/workflows\/|pipeline)/i],
   ["config", /(config|\.env|settings|\.ya?ml$|\.toml$|\.ini$)/i],
@@ -107,8 +109,18 @@ const API_BOUNDARY_PATTERNS: readonly RegExp[] = [
 ];
 
 const SOURCE_CODE_EXT = /\.([cm]?[jt]sx?|py|go|rb|java|rs|php|kt|swift|scala|c|cc|cpp|h|hpp|cs)$/i;
-const TEST_MARKER = /(\.|_|-)(test|spec)\.[cm]?[jt]sx?$/i;
-const TEST_DIR = /(^|\/)(__tests__|tests?)\//i;
+
+// A file is a test if its directory or its name marks it. Cross-language on
+// purpose: JS (`x.test.ts`), Python (`test_x.py`, `x_test.py`), Go (`x_test.go`),
+// Ruby (`x_spec.rb`), JVM (`XTest.java`). Without this a Python/Go backend's
+// tests are scored as untested production code, and their sources look untested.
+const TEST_DIR = /(^|\/)(__tests__|tests?|specs?)\//i;
+// Name markers, matched against the basename (the `^test_` prefix needs it):
+//   `test_x.<ext>` · `x.test.<ext>` / `x-spec.<ext>` / `x_test.<ext>`.
+const TEST_NAME = /(^test_|[._-](test|spec)s?\.)/i;
+// JVM CamelCase suffix (`UserServiceTest.java`) — case-sensitive so `latest.js`
+// and `manifest.ts` do not match.
+const TEST_NAME_JVM = /[a-z](Test|Spec)s?\.[a-z]+$/;
 
 interface RawHunk {
   file: string;
@@ -327,7 +339,15 @@ function touchesApiBoundary(rawLine: string): boolean {
 }
 
 function isTestFile(path: string): boolean {
-  return TEST_MARKER.test(path) || TEST_DIR.test(path);
+  if (TEST_DIR.test(path)) {
+    return true;
+  }
+  const name = basename(path);
+  return TEST_NAME.test(name) || TEST_NAME_JVM.test(name);
+}
+
+function basename(path: string): string {
+  return path.split("/").pop() ?? path;
 }
 
 function isSourceCode(path: string): boolean {
@@ -336,13 +356,15 @@ function isSourceCode(path: string): boolean {
 
 /** Base name used to pair a source file with its test (extension/markers off). */
 function testBase(path: string): string {
-  const seg = path.split("/").pop() ?? path;
-  return seg.replace(TEST_MARKER, "").replace(SOURCE_CODE_EXT, "");
+  const seg = basename(path).replace(SOURCE_CODE_EXT, "");
+  return seg
+    .replace(/^test_/i, "") // python prefix: test_identity → identity
+    .replace(/[._-](test|spec)s?$/i, "") // js/go/ruby suffix: widget.test, x_spec → x
+    .replace(/(Test|Spec)s?$/, ""); // jvm: UserServiceTest → UserService
 }
 
 function sourceBase(path: string): string {
-  const seg = path.split("/").pop() ?? path;
-  return seg.replace(SOURCE_CODE_EXT, "");
+  return basename(path).replace(SOURCE_CODE_EXT, "");
 }
 
 function isMissingTestDelta(path: string, testBases: Set<string>): boolean {

@@ -73,6 +73,16 @@ describe("rankHunks — risk-path signal (R1)", () => {
     const ranked = rankHunks(fileDiff(path, 1, 0), META);
     expect(ranked[0]?.signals.riskPathLabel).toBe(label);
   });
+
+  it("does not mislabel a frontend schemas/ dir as a migration path", () => {
+    const ranked = rankHunks(fileDiff("frontend/src/schemas/api-keys.ts", 1, 0), META);
+    expect(ranked[0]?.signals.riskPathLabel).toBeNull();
+  });
+
+  it("still labels a real prisma schema as a migration path", () => {
+    const ranked = rankHunks(fileDiff("prisma/schema.prisma", 1, 0), META);
+    expect(ranked[0]?.signals.riskPathLabel).toBe("migration");
+  });
 });
 
 describe("rankHunks — API-boundary signal (R1)", () => {
@@ -121,6 +131,29 @@ describe("rankHunks — missing-test-delta signal (R1)", () => {
   it("never flags a non-code file", () => {
     const ranked = rankHunks(fileDiff("docs/readme.md", 2, 0), META);
     expect(ranked[0]?.signals.missingTestDelta).toBe(false);
+  });
+
+  // Cross-language test recognition (issue surfaced reviewing a Python backend
+  // PR: pytest files were scored as untested production code).
+  it.each([
+    "e2e/test_auth.py", // python pytest prefix
+    "backend/identity_test.py", // python suffix
+    "internal/server_test.go", // go
+    "spec/models/user_spec.rb", // ruby
+    "src/main/java/UserServiceTest.java", // jvm camelcase
+  ])("never flags %s as its own missing test", (path) => {
+    const ranked = rankHunks(fileDiff(path, 2, 0), META);
+    expect(ranked[0]?.signals.missingTestDelta).toBe(false);
+  });
+
+  it("pairs a python source with its pytest file across the PR", () => {
+    const diff =
+      fileDiff("backend/src/shared/auth/identity.py", 2, 0) +
+      fileDiff("backend/tests/auth/test_identity.py", 2, 0);
+    const source = rankHunks(diff, META).find(
+      (c) => c.file.endsWith("identity.py") && !c.file.includes("test_"),
+    );
+    expect(source?.signals.missingTestDelta).toBe(false);
   });
 });
 
