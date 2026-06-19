@@ -1,4 +1,4 @@
-import { countHunks } from "@diffsense/core";
+import { rankHunks, renderComment } from "@diffsense/core";
 import { type GitHubClient, type UpsertResult, upsertReviewComment } from "../adapters/github.js";
 import type { PrRef } from "../types.js";
 
@@ -7,9 +7,9 @@ export type PullRequestEvent = Pick<PrRef, "owner" | "repo" | "prNumber" | "acti
 
 /**
  * The single integration seam every later slice plugs into (KTD5). Fetches the
- * PR diff, counts hunks (pure `core` fn), and upserts the placeholder comment.
- * Takes an already-built Octokit so it is testable with a fake — no queue, no
- * network.
+ * PR diff, ranks the hunks by structural risk (pure `core` fns, no LLM), and
+ * upserts the advisory ranked comment. Takes an already-built Octokit so it is
+ * testable with a fake — no queue, no network.
  */
 export async function handlePullRequestEvent(
   event: PullRequestEvent,
@@ -26,12 +26,12 @@ export async function handlePullRequestEvent(
 
   // With `format: "diff"` Octokit returns the raw unified diff as a string.
   // Anything else means the media-type request was not honored — fail loudly
-  // (BullMQ retries) rather than silently reporting "0 hunks".
+  // (BullMQ retries) rather than silently posting an empty ranking.
   if (typeof data !== "string") {
     throw new Error(`expected a string diff from pulls.get, got ${typeof data}`);
   }
-  const hunks = countHunks(data);
 
-  const body = `diffsense received this PR — ${hunks} hunks detected`;
+  const ranked = rankHunks(data, { owner, repo, prNumber });
+  const body = renderComment(ranked);
   return upsertReviewComment(octokit, { owner, repo, prNumber, body });
 }

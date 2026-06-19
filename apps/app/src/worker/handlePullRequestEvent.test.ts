@@ -60,7 +60,8 @@ describe("handlePullRequestEvent (R3, R4, R5)", () => {
     expect(fake.updateComment).not.toHaveBeenCalled();
     const body = fake.createComment.mock.calls[0]?.[0].body as string;
     expect(body).toContain(COMMENT_MARKER);
-    expect(body).toContain("1 hunks detected");
+    expect(body).toContain("review these first");
+    expect(body).toContain("**[High]**");
   });
 
   it("edits the same comment in place on synchronize (no duplicate)", async () => {
@@ -88,13 +89,13 @@ describe("handlePullRequestEvent (R3, R4, R5)", () => {
     expect(fake.updateComment).not.toHaveBeenCalled();
   });
 
-  it("still posts a comment when the diff has 0 hunks", async () => {
+  it("still posts a comment when the diff has no rankable changes", async () => {
     const fake = makeFakeOctokit({ diff: "" });
 
     await handlePullRequestEvent(openedEvent, fake.octokit);
 
     const body = fake.createComment.mock.calls[0]?.[0].body as string;
-    expect(body).toContain("0 hunks detected");
+    expect(body).toContain("No rankable changes");
   });
 
   it("throws and posts nothing when the diff fetch fails", async () => {
