@@ -33,6 +33,7 @@ function fakeVerifier(refute: (req: VerifyRequest) => boolean) {
       return { refuted, rationale: refuted ? "challenge succeeded" : "risk holds" };
     }),
     detectScopeCreep: vi.fn(),
+    synthesize: vi.fn(),
   };
   return { provider, requests };
 }
@@ -64,6 +65,7 @@ describe("verifyFindings", () => {
       reviewChunk: vi.fn(),
       verifyFinding: vi.fn().mockRejectedValue(new Error("provider down")),
       detectScopeCreep: vi.fn(),
+      synthesize: vi.fn(),
     };
 
     await expect(

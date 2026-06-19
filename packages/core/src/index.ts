@@ -8,6 +8,8 @@ export type {
   ReviewModelClass,
   ReviewRequest,
   ScopeRequest,
+  SynthesisFinding,
+  SynthesisRequest,
   VerifyRequest,
 } from "./ports/llmProvider.js";
 export type { LineRange, PrIntent, RepoReader } from "./ports/repoReader.js";
@@ -46,6 +48,12 @@ export {
   ReviewClaim,
   RiskRating,
 } from "./schemas/chunkReview.js";
+export {
+  type Portfolio,
+  PortfolioSchema,
+  type RiskPosition,
+  RiskPositionSchema,
+} from "./schemas/portfolio.js";
 export { type ChunkReaction, ChunkReactionSchema } from "./schemas/reaction.js";
 export {
   type ScopeCreepReport,
@@ -57,6 +65,11 @@ export {
   type VerificationVerdict,
   VerificationVerdictSchema,
 } from "./schemas/verification.js";
+export {
+  type ScopeAssessment,
+  type SynthesisPorts,
+  synthesizePortfolio,
+} from "./synthesis/synthesizePortfolio.js";
 export {
   type Finding,
   type VerifiedFinding,

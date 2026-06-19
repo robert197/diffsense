@@ -1,8 +1,10 @@
 import type { ReviewChunk } from "../review/reviewPass.js";
 import type { AnyReviewTool } from "../review/tools.js";
-import type { ChunkReview } from "../schemas/chunkReview.js";
+import type { ChunkReview, RiskRating } from "../schemas/chunkReview.js";
+import type { Portfolio } from "../schemas/portfolio.js";
 import type { ScopeCreepReport } from "../schemas/scopeCreep.js";
 import type { VerificationVerdict } from "../schemas/verification.js";
+import type { ScopeAssessment } from "../synthesis/synthesizePortfolio.js";
 import type { PrIntent } from "./repoReader.js";
 
 /**
@@ -56,6 +58,36 @@ export interface ScopeRequest {
   intent: PrIntent;
 }
 
+/**
+ * One verified, surviving finding as synthesis sees it (issue #11). `chunkRef` is
+ * the stable link target a portfolio position cites back to — the file the chunk
+ * belongs to.
+ */
+export interface SynthesisFinding {
+  /** Reference a portfolio position links back to (the chunk's file path). */
+  chunkRef: string;
+  /** File the chunk belongs to. */
+  file: string;
+  /** The finding's risk rating. */
+  rating: RiskRating;
+  /** The full review content — explanation, claims, reasons. */
+  review: ChunkReview;
+}
+
+/**
+ * Everything PR-level synthesis needs (issue #11). Like verify, a *single
+ * structured call, not a tool loop* (docs/ARCHITECTURE.md §3): the verified
+ * findings, the scope-creep assessment, and the stated intent are all in hand.
+ */
+export interface SynthesisRequest {
+  /** The verified survivors — refuted findings are already gone (#9). */
+  findings: readonly SynthesisFinding[];
+  /** Scope-creep assessment of the whole diff vs the stated intent (#10). */
+  scope: ScopeAssessment;
+  /** The PR's stated intent. */
+  intent: PrIntent;
+}
+
 export interface LLMProvider {
   /** Review one chunk, returning a Zod-validated `ChunkReview`. */
   reviewChunk(request: ReviewRequest): Promise<ChunkReview>;
@@ -70,4 +102,11 @@ export interface LLMProvider {
    * (issue #10).
    */
   detectScopeCreep(request: ScopeRequest): Promise<ScopeCreepReport>;
+  /**
+   * Synthesize the verified findings + scope assessment into a PR-level
+   * `Portfolio`: named, chunk-linked risk positions, an intent-coverage summary,
+   * and an overview — no single opaque score. Runs on the synthesis-class model
+   * (issue #11).
+   */
+  synthesize(request: SynthesisRequest): Promise<Portfolio>;
 }

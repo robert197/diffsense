@@ -4,10 +4,12 @@ import { createOpenAI } from "@ai-sdk/openai";
 import {
   ChunkReviewSchema,
   type LLMProvider,
+  PortfolioSchema,
   type ReviewChunk,
   type ReviewRequest,
   ScopeCreepReportSchema,
   type ScopeRequest,
+  type SynthesisRequest,
   VerificationVerdictSchema,
   type VerifyRequest,
 } from "@diffsense/core";
@@ -170,12 +172,69 @@ export function buildScopePrompt({ diff, intent }: ScopeRequest): string {
   ].join("\n");
 }
 
+/** System prompt: PR-level portfolio synthesis (issue #11, §3). */
+export const SYNTHESIS_SYSTEM_PROMPT = `You are a senior reviewer writing the PR-level summary. The per-chunk findings you are given already survived an independent verification pass — treat them as real risks, not noise.
+
+Roll them up the way a senior reviewer hands off a review:
+- Group related findings into named risk positions, counting what each covers (for example "2 unverified API-boundary changes", "1 undeclared data-model edit"). One finding can be its own position.
+- Each position must link back to the chunks it came from — cite them by the exact chunk reference(s) you were given. Never invent a reference.
+- Give each position a categorical severity: high, medium, or low.
+- Fold the scope-creep assessment in: an out-of-intent change is a risk position too, and it shapes the intent-coverage summary.
+
+Then produce:
+- positions: the named, chunk-linked risk positions (empty only if there is genuinely nothing to flag).
+- intentCoverage: a short summary of how well the change matches its stated intent — on scope, over scope (does more than declared), or under scope.
+- overview: a senior-reviewer-style paragraph on the PR's risk surface and what to look at first.
+
+Do NOT produce a single overall numeric score. The named positions and the summaries are the glanceable result. Be specific and grounded in the findings you were given.`;
+
+/** The synthesis user prompt — the verified findings, scope assessment, intent. */
+export function buildSynthesisPrompt({ findings, scope, intent }: SynthesisRequest): string {
+  const findingBlocks = findings.length
+    ? findings.map((finding, i) => {
+        const claims = finding.review.claims.length
+          ? finding.review.claims
+              .map((c) => `     - ${c.claim} (evidence: ${c.evidence})`)
+              .join("\n")
+          : "     - (none)";
+        return [
+          `${i + 1}. chunk ref: ${finding.chunkRef}  [${finding.rating}]`,
+          `   file: ${finding.file}`,
+          `   finding: ${finding.review.explanation}`,
+          "   claims:",
+          claims,
+        ].join("\n");
+      })
+    : ["(none survived verification)"];
+
+  const scopeBlock = scope.findings.length
+    ? scope.findings
+        .map(
+          (finding, i) => `${i + 1}. ${finding.description} — files: ${finding.files.join(", ")}`,
+        )
+        .join("\n")
+    : `(none — the diff stays within its stated intent: ${scope.withinIntent})`;
+
+  return [
+    "PR intent (what the author says the change is for):",
+    `  title: ${intent.title}`,
+    `  body: ${intent.body || "(empty)"}`,
+    "",
+    "Verified findings (link positions back using these chunk refs):",
+    ...findingBlocks,
+    "",
+    "Scope-creep assessment (whole diff vs intent):",
+    scopeBlock,
+  ].join("\n");
+}
+
 /**
  * Construct the `LLMProvider`. Provider + models come from env; each
  * `reviewChunk` call routes to the model class the deterministic shell chose,
  * runs the bounded tool loop, and returns a Zod-validated `ChunkReview`.
- * `verifyFinding` and `detectScopeCreep` are single structured calls (no tool
- * loop, §3) returning a Zod-validated `VerificationVerdict` / `ScopeCreepReport`.
+ * `verifyFinding`, `detectScopeCreep`, and `synthesize` are single structured
+ * calls (no tool loop, §3) returning a Zod-validated `VerificationVerdict` /
+ * `ScopeCreepReport` / `Portfolio`.
  */
 export function createReviewProvider(env: NodeJS.ProcessEnv = process.env): LLMProvider {
   const config = resolveModelConfig(env);
@@ -232,6 +291,21 @@ export function createReviewProvider(env: NodeJS.ProcessEnv = process.env): LLMP
         system: SCOPE_SYSTEM_PROMPT,
         prompt: buildScopePrompt(request),
         output: Output.object({ schema: ScopeCreepReportSchema }),
+      });
+
+      return output;
+    },
+
+    async synthesize(request: SynthesisRequest) {
+      const { output } = await generateText({
+        // Synthesis runs on the synthesis-class model (claude-fable-5 by
+        // default): the top-risk roll-up earns the stronger tier. A single
+        // structured call — the verified findings + scope + intent are in hand,
+        // nothing to explore (§3).
+        model: model(config.synthesisModel),
+        system: SYNTHESIS_SYSTEM_PROMPT,
+        prompt: buildSynthesisPrompt(request),
+        output: Output.object({ schema: PortfolioSchema }),
       });
 
       return output;

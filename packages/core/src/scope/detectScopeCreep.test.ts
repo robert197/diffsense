@@ -43,6 +43,7 @@ function fakeScoper(report: (req: ScopeRequest) => ScopeCreepReport) {
       requests.push(request);
       return report(request);
     }),
+    synthesize: vi.fn(),
   };
   return { provider, requests };
 }
@@ -131,6 +132,7 @@ describe("detectScopeCreep", () => {
       reviewChunk: vi.fn(),
       verifyFinding: vi.fn(),
       detectScopeCreep: vi.fn().mockRejectedValue(new Error("provider down")),
+      synthesize: vi.fn(),
     };
 
     await expect(detectScopeCreep(DIFF, INTENT, { llm: provider })).rejects.toThrow(
