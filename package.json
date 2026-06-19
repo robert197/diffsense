@@ -24,7 +24,7 @@
     "vitest": "^2.1.8"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["@biomejs/biome", "esbuild", "msgpackr-extract"],
+    "onlyBuiltDependencies": ["@ast-grep/napi", "@biomejs/biome", "esbuild", "msgpackr-extract"],
     "overrides": {
       "ioredis": "5.11.1"
     }

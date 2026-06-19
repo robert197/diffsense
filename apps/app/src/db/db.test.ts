@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
+import { createDrizzleConventionStore } from "../adapters/conventionStore.js";
 import { createDrizzleReactionStore } from "../adapters/reactionStore.js";
 import { createDb } from "./client.js";
 import { processedEvents, reactions } from "./schema.js";
@@ -49,5 +50,18 @@ describe.skipIf(!databaseUrl)("db round-trip (R6)", () => {
     expect(rows[0]?.tier).toBe("High");
     expect(rows[0]?.sentiment).toBe("up");
     expect(rows[0]?.prNumber).toBe(42);
+  });
+
+  it("round-trips per-repo convention notes, last write wins (#7, R4)", async () => {
+    const store = createDrizzleConventionStore(db);
+    const repo = { owner: `octo-${Date.now()}`, repo: `demo-${Math.round(Math.random() * 1e6)}` };
+
+    await expect(store.readConventions(repo)).resolves.toBeNull();
+
+    await store.writeConventions(repo, "note A");
+    await expect(store.readConventions(repo)).resolves.toBe("note A");
+
+    await store.writeConventions(repo, "note B");
+    await expect(store.readConventions(repo)).resolves.toBe("note B");
   });
 });

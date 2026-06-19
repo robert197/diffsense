@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ast-grep/napi": "^0.43.0",
     "@diffsense/core": "workspace:*",
     "@diffsense/llm": "workspace:*",
     "@hono/node-server": "^1.13.7",
