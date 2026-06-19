@@ -2,10 +2,11 @@ import type { ChunkReview } from "@diffsense/core";
 import { eq } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { createDrizzleConventionStore } from "../adapters/conventionStore.js";
+import { createDrizzleCostStore } from "../adapters/costStore.js";
 import { createDrizzleFingerprintCache } from "../adapters/fingerprintCache.js";
 import { createDrizzleReactionStore } from "../adapters/reactionStore.js";
 import { createDb } from "./client.js";
-import { processedEvents, reactions } from "./schema.js";
+import { costs, processedEvents, reactions } from "./schema.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -87,5 +88,29 @@ describe.skipIf(!databaseUrl)("db round-trip (R6)", () => {
     const second: ChunkReview = { ...first, rating: "high", reasons: ["touches auth"] };
     await cache.set(repo, fingerprint, second);
     await expect(cache.get(repo, fingerprint)).resolves.toEqual(second);
+  });
+
+  it("persists a per-PR inference cost record, append-only (#12)", async () => {
+    const store = createDrizzleCostStore(db);
+    const prNumber = Math.round(Math.random() * 1e6);
+
+    await store.record({
+      owner: "octo-org",
+      repo: "demo",
+      prNumber,
+      inputTokens: 3_500_000,
+      outputTokens: 350_000,
+      costUsd: 36.75,
+      overThreshold: true,
+    });
+
+    const rows = await db.select().from(costs).where(eq(costs.prNumber, prNumber));
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.inputTokens).toBe(3_500_000);
+    expect(rows[0]?.outputTokens).toBe(350_000);
+    expect(Number(rows[0]?.costUsd)).toBeCloseTo(36.75, 6);
+    expect(rows[0]?.overThreshold).toBe(true);
+    expect(rows[0]?.createdAt).toBeInstanceOf(Date);
   });
 });

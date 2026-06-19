@@ -1,4 +1,4 @@
-import { type ReactionOptions, rankHunks, renderComment } from "@diffsense/core";
+import { type ReactionOptions, rankHunks, renderRankedComment } from "@diffsense/core";
 import { type GitHubClient, type UpsertResult, upsertReviewComment } from "../adapters/github.js";
 import type { PrRef } from "../types.js";
 
@@ -41,6 +41,6 @@ export async function handlePullRequestEvent(
   const reactions: ReactionOptions | undefined = opts.reactionBaseUrl
     ? { reactionBaseUrl: opts.reactionBaseUrl, pr: { owner, repo, prNumber } }
     : undefined;
-  const body = renderComment(ranked, reactions);
+  const body = renderRankedComment(ranked, reactions);
   return upsertReviewComment(octokit, { owner, repo, prNumber, body });
 }
