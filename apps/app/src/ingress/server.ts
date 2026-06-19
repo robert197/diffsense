@@ -1,3 +1,4 @@
+import { type ChunkReaction, ChunkReactionSchema } from "@diffsense/core";
 import { Webhooks } from "@octokit/webhooks";
 import { Hono } from "hono";
 import type { PrRef } from "../types.js";
@@ -7,6 +8,12 @@ const MAX_BODY_BYTES = 5_000_000;
 export interface IngressDeps {
   webhookSecret: string;
   enqueue: (ref: PrRef) => Promise<void>;
+  /**
+   * Records a reviewer 👍/👎 on a flagged chunk (issue #3). Optional: when
+   * absent, the `/reactions` route is inert (404) so a deployment that has not
+   * wired a store does not advertise a broken link.
+   */
+  recordReaction?: (reaction: ChunkReaction) => Promise<void>;
 }
 
 /** Minimal shape of the `pull_request` webhook payload fields we consume. */
@@ -51,17 +58,103 @@ async function readBodyCapped(req: Request, maxBytes: number): Promise<string> {
   return new TextDecoder().decode(merged);
 }
 
+/** Validate `/reactions` query params against the store's schema. */
+function parseReactionParams(q: Record<string, string>) {
+  return ChunkReactionSchema.safeParse({
+    owner: q.owner,
+    repo: q.repo,
+    prNumber: Number(q.pr),
+    fingerprint: q.fp,
+    tier: q.tier,
+    sentiment: q.s,
+  });
+}
+
+/** Escape a string for safe interpolation into an HTML attribute or text node. */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * Minimal confirm page whose button POSTs the reaction back to this endpoint.
+ * The original query string is preserved on the form action so the POST sees
+ * the same validated params. This is what keeps automated link prefetchers
+ * from recording reactions: they fetch the GET but never submit the form.
+ */
+function renderConfirmPage(reaction: ChunkReaction): string {
+  const params = new URLSearchParams({
+    owner: reaction.owner,
+    repo: reaction.repo,
+    pr: String(reaction.prNumber),
+    fp: reaction.fingerprint,
+    tier: reaction.tier,
+    s: reaction.sentiment,
+  });
+  const action = `/reactions?${params.toString()}`;
+  const label = reaction.sentiment === "up" ? "👍 helpful" : "👎 not helpful";
+  return `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Confirm reaction</title></head>
+<body>
+<p>Record this reaction as <strong>${escapeHtml(label)}</strong>?</p>
+<form method="post" action="${escapeHtml(action)}">
+<button type="submit">Confirm</button>
+</form>
+</body>
+</html>`;
+}
+
 /**
  * Hono ingress. Verifies the webhook HMAC signature (KTD3), narrows to
  * `pull_request` `opened`/`synchronize`, enqueues a serializable `PrRef`
  * (KTD4), and acks 202 fast. Signature failures → 401. The producer is
  * injected so tests run without Redis.
  */
-export function createServer({ webhookSecret, enqueue }: IngressDeps): Hono {
+export function createServer({ webhookSecret, enqueue, recordReaction }: IngressDeps): Hono {
   const app = new Hono();
   const webhooks = new Webhooks({ secret: webhookSecret });
 
   app.get("/healthz", (c) => c.json({ ok: true }));
+
+  // Reviewer feedback (issue #3). The 👍/👎 links in the ranked comment point
+  // here. The write is a POST, not a GET: a GET that writes gets fired
+  // automatically by email link scanners (Outlook SafeLinks, Mimecast) and
+  // link prefetchers, which would poison the precision signal with reactions
+  // no human ever made. So the GET only renders a one-click confirm page and
+  // the button on it POSTs the reaction. Params are validated by the same Zod
+  // schema the store expects on both routes.
+  app.get("/reactions", (c) => {
+    if (!recordReaction) {
+      return c.json({ error: "reactions not enabled" }, 404);
+    }
+    const parsed = parseReactionParams(c.req.query());
+    if (!parsed.success) {
+      return c.json({ error: "invalid reaction parameters" }, 400);
+    }
+    return c.html(renderConfirmPage(parsed.data));
+  });
+
+  app.post("/reactions", async (c) => {
+    if (!recordReaction) {
+      return c.json({ error: "reactions not enabled" }, 404);
+    }
+    const parsed = parseReactionParams(c.req.query());
+    if (!parsed.success) {
+      return c.json({ error: "invalid reaction parameters" }, 400);
+    }
+    try {
+      await recordReaction(parsed.data);
+    } catch (err) {
+      console.error("failed to record reaction:", err);
+      return c.json({ error: "could not record reaction" }, 503);
+    }
+    return c.text("Thanks, recorded. You can close this tab.");
+  });
 
   app.post("/webhook", async (c) => {
     const signature = c.req.header("x-hub-signature-256");

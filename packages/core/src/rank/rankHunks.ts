@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import parseDiff from "parse-diff";
+import { type DemotionReason, classifyDemotion } from "../diff/demote.js";
 
 /**
  * Structural risk ranking for PR hunks — pure, deterministic, no LLM.
@@ -10,6 +11,14 @@ import parseDiff from "parse-diff";
  * decides *where reviewer attention goes first*, so it is hardcoded on purpose
  * (cost/attention control, not domain judgment). The Octokit fetch that
  * produces the diff lives in `apps/app` — `core` stays pure (no vendor SDK).
+ *
+ * Two robustness properties matter (issue #3):
+ * - Generated/binary/lockfile hunks are demoted to Low and kept out of the
+ *   "review first" set even when large, so machine-written noise never crowds
+ *   out the real change.
+ * - It degrades gracefully on unrecognized languages: every signal contributes
+ *   zero when it does not match, so the score falls back to size + risk-path and
+ *   a valid ordering is always produced (it never throws on a parseable diff).
  */
 
 export type Tier = "High" | "Medium" | "Low";
@@ -31,6 +40,10 @@ export interface RankedSignals {
   apiBoundary: boolean;
   /** Source-code file changed with no corresponding test file in the PR. */
   missingTestDelta: boolean;
+  /** Machine-written noise (generated/binary/lockfile): forced to Low. */
+  demoted: boolean;
+  /** Which demotion category the path matched, or null. */
+  demotionReason: DemotionReason | null;
 }
 
 export interface RankedChunk {
@@ -48,6 +61,8 @@ export interface RankedChunk {
   reason: string;
   /** URL into the PR Files-changed view, anchored at this hunk. */
   deepLink: string;
+  /** Stable per-chunk id used to key reviewer reactions (positional for now). */
+  fingerprint: string;
   signals: RankedSignals;
 }
 
@@ -161,12 +176,14 @@ export function rankHunks(diff: string, meta: PrMeta): RankedChunk[] {
   }
 
   // Rank by score desc; deterministic tiebreak by path, then encounter order.
+  // Use a byte comparison (not localeCompare) so the order is identical across
+  // OS/ICU builds — the ranking's determinism is a hard guarantee (CLAUDE.md).
   const scored = raw
     .map((hunk) => ({ order: hunk.order, chunk: buildRankedChunk(hunk, testBases, meta) }))
     .sort(
       (a, b) =>
         b.chunk.score - a.chunk.score ||
-        a.chunk.file.localeCompare(b.chunk.file) ||
+        byteCompare(a.chunk.file, b.chunk.file) ||
         a.order - b.order,
     )
     .map((entry) => entry.chunk);
@@ -179,6 +196,7 @@ function buildRankedChunk(hunk: RawHunk, testBases: Set<string>, meta: PrMeta): 
   const sizeScore = Math.log2(1 + hunk.added + hunk.deleted);
   const risk = riskCategory(hunk.file);
   const missingTestDelta = isMissingTestDelta(hunk.file, testBases);
+  const demotionReason = classifyDemotion(hunk.file);
 
   const signals: RankedSignals = {
     sizeScore,
@@ -186,6 +204,8 @@ function buildRankedChunk(hunk: RawHunk, testBases: Set<string>, meta: PrMeta): 
     riskPathLabel: risk,
     apiBoundary: hunk.apiBoundary,
     missingTestDelta,
+    demoted: demotionReason !== null,
+    demotionReason,
   };
 
   const score =
@@ -207,19 +227,32 @@ function buildRankedChunk(hunk: RawHunk, testBases: Set<string>, meta: PrMeta): 
     tier: "Low", // re-assigned by assignTiers once the whole set is ranked
     reason: buildReason(hunk, signals),
     deepLink: deepLink(meta, hunk.file, side, line),
+    fingerprint: fingerprint(hunk.file, side, line),
     signals,
   };
 }
 
-/** Assign High/Medium/Low by count-based percentile; always ≥1 High. */
+/**
+ * Assign High/Medium/Low by count-based percentile; always ≥1 High.
+ *
+ * Demoted hunks (generated/binary/lockfile) are forced to Low and excluded from
+ * the percentile base, so machine-written noise never lands in the review-first
+ * set and never displaces a real change from it (issue #3, R1).
+ */
 function assignTiers(chunks: RankedChunk[]): void {
-  const n = chunks.length;
+  const candidates = chunks.filter((c) => !c.signals.demoted);
+  const n = candidates.length;
+  for (const chunk of chunks) {
+    if (chunk.signals.demoted) {
+      chunk.tier = "Low";
+    }
+  }
   if (n === 0) {
     return;
   }
   const highCount = Math.max(1, Math.round(HIGH_PCTL * n));
   const medCount = Math.round(MED_PCTL * n);
-  chunks.forEach((chunk, i) => {
+  candidates.forEach((chunk, i) => {
     if (i < highCount) {
       chunk.tier = "High";
     } else if (i < highCount + medCount) {
@@ -231,6 +264,9 @@ function assignTiers(chunks: RankedChunk[]): void {
 }
 
 function buildReason(hunk: RawHunk, signals: RankedSignals): string {
+  if (signals.demotionReason) {
+    return `${capitalize(signals.demotionReason)} file, demoted`;
+  }
   const total = hunk.added + hunk.deleted;
   const band = total >= 50 ? "Large" : total >= 10 ? "Medium" : "Small";
   const parts = [`${band} change (${total} lines)`];
@@ -249,6 +285,23 @@ function buildReason(hunk: RawHunk, signals: RankedSignals): string {
 function deepLink(meta: PrMeta, path: string, side: "R" | "L", line: number): string {
   const anchor = createHash("sha256").update(path).digest("hex");
   return `https://github.com/${meta.owner}/${meta.repo}/pull/${meta.prNumber}/files#diff-${anchor}${side}${line}`;
+}
+
+/**
+ * Stable per-chunk id used to key reviewer reactions. Positional for now
+ * (`file:side:line`); the structural/AST fingerprint is issue #8.
+ */
+function fingerprint(path: string, side: "R" | "L", line: number): string {
+  return createHash("sha256").update(`${path}:${side}:${line}`).digest("hex").slice(0, 16);
+}
+
+function capitalize(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+/** Locale-independent string order, so the tiebreak is byte-deterministic. */
+function byteCompare(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /** The path GitHub uses for the file: the new path, or the old one if deleted. */

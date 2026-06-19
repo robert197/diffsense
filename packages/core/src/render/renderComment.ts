@@ -1,6 +1,19 @@
 import type { RankedChunk } from "../rank/rankHunks.js";
 
 /**
+ * Optional reaction affordance config. When both fields are present, each
+ * flagged (High/Medium) chunk gets a one-click 👍/👎 link pointing at the
+ * diffsense ingress, so a reviewer can mark a flag as a real catch or noise
+ * without any separate instrumentation (issue #3). Absent → the comment renders
+ * exactly as before, so the worker never hard-depends on a public URL.
+ */
+export interface ReactionOptions {
+  /** Public base URL of the diffsense ingress (e.g. https://diffsense.example). */
+  reactionBaseUrl: string;
+  pr: { owner: string; repo: string; prNumber: number };
+}
+
+/**
  * Render the advisory PR comment from ranked hunks — pure, no I/O.
  *
  * The comment points the reviewer at the riskiest changes first (High, then
@@ -10,7 +23,7 @@ import type { RankedChunk } from "../rank/rankHunks.js";
  * product stays advisory until trust is earned). The hidden idempotency marker
  * is added by the github adapter, not here.
  */
-export function renderComment(rankedChunks: RankedChunk[]): string {
+export function renderComment(rankedChunks: RankedChunk[], reactions?: ReactionOptions): string {
   const header = [
     "### diffsense — review these first",
     "",
@@ -28,10 +41,10 @@ export function renderComment(rankedChunks: RankedChunk[]): string {
   const lines = [...header];
 
   if (high.length > 0) {
-    lines.push("", "**High**", ...high.map(renderItem));
+    lines.push("", "**High**", ...high.map((c) => renderItem(c, reactions)));
   }
   if (medium.length > 0) {
-    lines.push("", "**Medium**", ...medium.map(renderItem));
+    lines.push("", "**Medium**", ...medium.map((c) => renderItem(c, reactions)));
   }
   if (lowCount > 0) {
     const plural = lowCount === 1 ? "hunk" : "hunks";
@@ -41,6 +54,30 @@ export function renderComment(rankedChunks: RankedChunk[]): string {
   return lines.join("\n");
 }
 
-function renderItem(chunk: RankedChunk): string {
-  return `- **[${chunk.tier}]** [${chunk.file}:${chunk.line}](${chunk.deepLink}) — ${chunk.reason}`;
+function renderItem(chunk: RankedChunk, reactions?: ReactionOptions): string {
+  const base = `- **[${chunk.tier}]** [${chunk.file}:${chunk.line}](${chunk.deepLink}) — ${chunk.reason}`;
+  return reactions ? `${base} ${reactionAffordance(chunk, reactions)}` : base;
+}
+
+/** `[👍](url) / [👎](url)` linking to the reaction endpoint for this chunk. */
+function reactionAffordance(chunk: RankedChunk, reactions: ReactionOptions): string {
+  const up = reactionUrl(chunk, reactions, "up");
+  const down = reactionUrl(chunk, reactions, "down");
+  return `[👍](${up}) / [👎](${down})`;
+}
+
+function reactionUrl(
+  chunk: RankedChunk,
+  { reactionBaseUrl, pr }: ReactionOptions,
+  sentiment: "up" | "down",
+): string {
+  const params = new URLSearchParams({
+    owner: pr.owner,
+    repo: pr.repo,
+    pr: String(pr.prNumber),
+    fp: chunk.fingerprint,
+    tier: chunk.tier,
+    s: sentiment,
+  });
+  return `${reactionBaseUrl.replace(/\/$/, "")}/reactions?${params.toString()}`;
 }

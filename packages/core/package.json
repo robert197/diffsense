@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "parse-diff": "^0.11.1"
+    "parse-diff": "^0.11.1",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "typescript": "^5.7.2"
