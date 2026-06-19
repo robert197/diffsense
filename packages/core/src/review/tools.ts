@@ -21,6 +21,20 @@ export interface ReviewTool<I, O> {
   execute: (input: I) => Promise<O>;
 }
 
+/**
+ * A `ReviewTool` with its input/output types erased, for passing a mixed list
+ * across the `LLMProvider` boundary (the review unit hands the model whatever
+ * tools it was wired with). `execute` is a *method* so the concrete tuple from
+ * `createReviewTools` stays assignable; `packages/llm` re-derives the precise
+ * input type from `inputSchema` when it maps each one to an AI SDK `tool()`.
+ */
+export interface AnyReviewTool {
+  name: string;
+  description: string;
+  inputSchema: z.ZodTypeAny;
+  execute(input: unknown): Promise<unknown>;
+}
+
 /** Input schemas, exported so the #8 llm adapter can reuse them verbatim. */
 export const ReadFileInput = z.object({
   path: z.string().min(1),

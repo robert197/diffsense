@@ -1,6 +1,8 @@
+import type { ChunkReview } from "@diffsense/core";
 import { eq } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { createDrizzleConventionStore } from "../adapters/conventionStore.js";
+import { createDrizzleFingerprintCache } from "../adapters/fingerprintCache.js";
 import { createDrizzleReactionStore } from "../adapters/reactionStore.js";
 import { createDb } from "./client.js";
 import { processedEvents, reactions } from "./schema.js";
@@ -63,5 +65,27 @@ describe.skipIf(!databaseUrl)("db round-trip (R6)", () => {
 
     await store.writeConventions(repo, "note B");
     await expect(store.readConventions(repo)).resolves.toBe("note B");
+  });
+
+  it("round-trips a cached ChunkReview by fingerprint, last write wins (#8)", async () => {
+    const cache = createDrizzleFingerprintCache(db);
+    const repo = { owner: `octo-${Date.now()}`, repo: `demo-${Math.round(Math.random() * 1e6)}` };
+    const fingerprint = `fp-${Date.now()}-${Math.round(Math.random() * 1e6)}`;
+
+    const first: ChunkReview = {
+      explanation: "adds a guard",
+      claims: [{ claim: "guards null", evidence: "src/a.ts:1" }],
+      rating: "low",
+      reasons: ["small change"],
+    };
+
+    await expect(cache.get(repo, fingerprint)).resolves.toBeNull();
+
+    await cache.set(repo, fingerprint, first);
+    await expect(cache.get(repo, fingerprint)).resolves.toEqual(first);
+
+    const second: ChunkReview = { ...first, rating: "high", reasons: ["touches auth"] };
+    await cache.set(repo, fingerprint, second);
+    await expect(cache.get(repo, fingerprint)).resolves.toEqual(second);
   });
 });

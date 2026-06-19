@@ -1,4 +1,4 @@
-import { integer, pgTable, serial, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { integer, jsonb, pgTable, serial, text, timestamp, unique } from "drizzle-orm/pg-core";
 
 /**
  * Minimal baseline table — exists to prove the Postgres connection + Drizzle
@@ -47,5 +47,32 @@ export const conventions = pgTable(
   },
   (table) => ({
     repoUnique: unique("conventions_owner_repo_unique").on(table.owner, table.repo),
+  }),
+);
+
+/**
+ * Per-chunk review cache keyed by a structural fingerprint (issue #8,
+ * docs/ARCHITECTURE.md §5). A recurring chunk reuses its stored `ChunkReview`
+ * instead of issuing a fresh LLM call — inference follows attention, not PR size.
+ * `FingerprintCache` (in `core`) is the port; this is the table its Drizzle
+ * adapter upserts into. One review row per `(owner, repo, fingerprint)`.
+ */
+export const fingerprints = pgTable(
+  "fingerprints",
+  {
+    id: serial("id").primaryKey(),
+    owner: text("owner").notNull(),
+    repo: text("repo").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    /** The cached `ChunkReview`, stored as JSON and re-validated on read. */
+    review: jsonb("review").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    chunkUnique: unique("fingerprints_owner_repo_fingerprint_unique").on(
+      table.owner,
+      table.repo,
+      table.fingerprint,
+    ),
   }),
 );

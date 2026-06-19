@@ -11,6 +11,14 @@
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.0",
+    "@ai-sdk/google": "^3.0.0",
+    "@ai-sdk/openai": "^3.0.0",
+    "@diffsense/core": "workspace:*",
+    "ai": "^6.0.0",
+    "zod": "^3.24.1"
+  },
   "devDependencies": {
     "typescript": "^5.7.2"
   }
