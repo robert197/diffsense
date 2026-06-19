@@ -88,6 +88,35 @@ export const fingerprints = pgTable(
 );
 
 /**
+ * Per-chunk review findings (issue #13, docs/ARCHITECTURE.md §6) — the read-model
+ * the hosted card view renders. One row per reviewed chunk: its identity, its
+ * within-PR risk order, the review content (explanation/claims/reasons), and the
+ * chunk's blast radius. One run's findings at a time per PR: a re-review replaces
+ * the PR's rows (`FindingStore.replaceForPr`, transactional delete + insert), so
+ * the card view never shows stacked duplicates of recurring chunks. `listByPr`
+ * orders by `rank asc`. `FindingStore` (in `core`) is the port; this is the table
+ * its Drizzle adapter writes, and the one `apps/web` reads back.
+ */
+export const findings = pgTable("findings", {
+  id: serial("id").primaryKey(),
+  owner: text("owner").notNull(),
+  repo: text("repo").notNull(),
+  prNumber: integer("pr_number").notNull(),
+  fingerprint: text("fingerprint").notNull(),
+  file: text("file").notNull(),
+  tier: text("tier").notNull(),
+  rank: integer("rank").notNull(),
+  explanation: text("explanation").notNull(),
+  /** Falsifiable claims, stored as JSON and re-validated on read. */
+  claims: jsonb("claims").notNull(),
+  /** Named risk reasons, stored as JSON. */
+  reasons: jsonb("reasons").notNull(),
+  /** Blast-radius call sites, stored as JSON. */
+  blastRadius: jsonb("blast_radius").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
  * Per-PR inference cost (issue #12, docs/ARCHITECTURE.md §2) — product
  * observability. One append-only row per review run records the summed token
  * usage, the USD cost (token usage × per-model rate), and whether the run crossed

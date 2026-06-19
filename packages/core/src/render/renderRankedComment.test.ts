@@ -147,3 +147,25 @@ describe("renderComment — reaction affordance (R3)", () => {
     expect(without.length).toBeLessThan(withReactions.length);
   });
 });
+
+describe("renderComment — card-view link (#13)", () => {
+  const CARD_URL = "https://diffsense.example/pr/o/r/1";
+
+  it("appends the card-view link when a URL is provided", () => {
+    const out = renderRankedComment([chunk("a.ts", "High")], undefined, CARD_URL);
+    expect(out).toContain(`[View the full risk cards →](${CARD_URL})`);
+  });
+
+  it("appends the link even when there are no rankable changes", () => {
+    const out = renderRankedComment([], undefined, CARD_URL);
+    expect(out).toContain("No rankable changes");
+    expect(out).toContain(CARD_URL);
+  });
+
+  it("leaves the output unchanged when no card-view URL is provided", () => {
+    const withLink = renderRankedComment([chunk("a.ts", "High")], undefined, CARD_URL);
+    const without = renderRankedComment([chunk("a.ts", "High")]);
+    expect(without).not.toContain("View the full risk cards");
+    expect(without.length).toBeLessThan(withLink.length);
+  });
+});

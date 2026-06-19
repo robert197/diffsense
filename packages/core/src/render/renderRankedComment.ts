@@ -23,10 +23,16 @@ export const MAX_LISTED = 10;
  * until trust is earned). The hidden idempotency marker is added by the github
  * adapter, not here. The enriched portfolio comment (issue #12) is a separate
  * renderer (`renderComment`) used once the agentic pipeline runs.
+ *
+ * When `cardViewUrl` is given, a link to the hosted card view (issue #13) is
+ * appended so the reviewer can open the full per-chunk detail. Absent → the
+ * comment renders exactly as before, so a deployment without the web role never
+ * advertises a dead link.
  */
 export function renderRankedComment(
   rankedChunks: RankedChunk[],
   reactions?: ReactionOptions,
+  cardViewUrl?: string,
 ): string {
   const header = [
     "### diffsense — review these first",
@@ -35,7 +41,7 @@ export function renderRankedComment(
   ];
 
   if (rankedChunks.length === 0) {
-    return [...header, "", "No rankable changes in this PR."].join("\n");
+    return withCardViewLink([...header, "", "No rankable changes in this PR."], cardViewUrl);
   }
 
   const high = rankedChunks.filter((c) => c.tier === "High");
@@ -73,6 +79,14 @@ export function renderRankedComment(
     lines.push("", `Plus ${lowCount} lower-risk ${plural} not listed.`);
   }
 
+  return withCardViewLink(lines, cardViewUrl);
+}
+
+/** Append the hosted card-view link when one is configured, then join. */
+function withCardViewLink(lines: string[], cardViewUrl?: string): string {
+  if (cardViewUrl) {
+    lines.push("", `[View the full risk cards →](${cardViewUrl})`);
+  }
   return lines.join("\n");
 }
 

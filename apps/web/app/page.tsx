@@ -4,8 +4,9 @@ export default function Home() {
       <div style={{ maxWidth: 520, textAlign: "center" }}>
         <h1 style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>diffsense</h1>
         <p style={{ opacity: 0.7, lineHeight: 1.5 }}>
-          Card view — coming soon. The hosted, read-only view over review findings ships in a later
-          slice (#13).
+          The hosted, advisory card view over review findings. Open a specific PR at{" "}
+          <code>/pr/&lt;owner&gt;/&lt;repo&gt;/&lt;number&gt;</code> — the link is in the diffsense
+          PR comment.
         </p>
       </div>
     </main>

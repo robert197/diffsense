@@ -130,4 +130,59 @@ describe("handlePullRequestEvent (R3, R4, R5)", () => {
     expect(body).not.toContain("/reactions?");
     expect(body).not.toContain("👍");
   });
+
+  it("links the hosted card view when a card-view base URL is provided (#13)", async () => {
+    const fake = makeFakeOctokit({});
+
+    await handlePullRequestEvent(openedEvent, fake.octokit, {
+      cardViewBaseUrl: "https://cards.example",
+    });
+
+    const body = fake.createComment.mock.calls[0]?.[0].body as string;
+    expect(body).toContain(
+      "[View the full risk cards →](https://cards.example/pr/octo-org/demo/42)",
+    );
+  });
+
+  it("runs the review-findings pass with the diff when wired, then comments (#13)", async () => {
+    const fake = makeFakeOctokit({});
+    const reviewFindings = vi.fn(
+      async (_ctx: { owner: string; repo: string; prNumber: number; diff: string }) => undefined,
+    );
+
+    await handlePullRequestEvent(openedEvent, fake.octokit, {
+      cardViewBaseUrl: "https://cards.example",
+      reviewFindings,
+    });
+
+    expect(reviewFindings).toHaveBeenCalledOnce();
+    expect(reviewFindings.mock.calls[0]?.[0]).toMatchObject({
+      owner: "octo-org",
+      repo: "demo",
+      prNumber: 42,
+      diff: ONE_HUNK_DIFF,
+    });
+    expect(fake.createComment).toHaveBeenCalledOnce();
+  });
+
+  it("still posts the ranked comment when the review-findings pass throws (#13)", async () => {
+    const fake = makeFakeOctokit({});
+    const reviewFindings = vi.fn(async () => {
+      throw new Error("llm exploded");
+    });
+
+    const result = await handlePullRequestEvent(openedEvent, fake.octokit, { reviewFindings });
+
+    expect(result.action).toBe("created");
+    expect(fake.createComment).toHaveBeenCalledOnce();
+  });
+
+  it("does not link the card view by default (#13)", async () => {
+    const fake = makeFakeOctokit({});
+
+    await handlePullRequestEvent(openedEvent, fake.octokit);
+
+    const body = fake.createComment.mock.calls[0]?.[0].body as string;
+    expect(body).not.toContain("View the full risk cards");
+  });
 });

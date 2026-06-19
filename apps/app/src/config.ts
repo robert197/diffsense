@@ -18,6 +18,9 @@ const ConfigSchema = z.object({
   // Public URL of the ingress, used to build the 👍/👎 reaction links in the
   // comment. Optional: when unset, the comment renders without the affordance.
   publicBaseUrl: z.string().url("PUBLIC_BASE_URL must be a valid URL").optional(),
+  // Public URL of the hosted card view (apps/web). Optional: when set, the
+  // ranked comment links to the per-PR cards (issue #13). When unset, no link.
+  webBaseUrl: z.string().url("WEB_BASE_URL must be a valid URL").optional(),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -31,6 +34,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     redisUrl: env.REDIS_URL,
     port: env.PORT,
     publicBaseUrl: env.PUBLIC_BASE_URL,
+    webBaseUrl: env.WEB_BASE_URL,
   });
 
   if (!result.success) {

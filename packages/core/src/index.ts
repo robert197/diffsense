@@ -4,6 +4,7 @@ export type { CodeReference, CodeSearch } from "./ports/codeSearch.js";
 export type { ConventionStore, RepoRef } from "./ports/conventionStore.js";
 export type { CostStore, PrCostRecord } from "./ports/costStore.js";
 export type { FingerprintCache } from "./ports/fingerprintCache.js";
+export type { FindingPrRef, FindingStore } from "./ports/findingStore.js";
 export type {
   LLMProvider,
   ReviewModelClass,
@@ -31,6 +32,7 @@ export {
   computeCost,
   recordCost,
 } from "./cost/recordCost.js";
+export { type CardViewPr, cardViewLink } from "./render/cardViewLink.js";
 export {
   type ReactionOptions,
   type ReactionTier,
@@ -51,6 +53,14 @@ export {
   reviewChunks,
   selectReviewChunks,
 } from "./review/reviewPass.js";
+export { type ToFindingsContext, toFindings } from "./review/toFindings.js";
+export {
+  type ReviewFindingsContext,
+  type ReviewFindingsPorts,
+  buildReviewChunks,
+  extractSymbols,
+  reviewAndPersistFindings,
+} from "./review/reviewFindings.js";
 export {
   type AnyReviewTool,
   type ReviewTool,
@@ -66,6 +76,7 @@ export {
   ReviewClaim,
   RiskRating,
 } from "./schemas/chunkReview.js";
+export { type ReviewFinding, ReviewFindingSchema } from "./schemas/finding.js";
 export {
   type Portfolio,
   PortfolioSchema,
