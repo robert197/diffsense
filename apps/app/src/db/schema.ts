@@ -1,4 +1,4 @@
-import { integer, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
+import { integer, pgTable, serial, text, timestamp, unique } from "drizzle-orm/pg-core";
 
 /**
  * Minimal baseline table — exists to prove the Postgres connection + Drizzle
@@ -29,3 +29,23 @@ export const reactions = pgTable("reactions", {
   sentiment: text("sentiment").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Per-repo learned conventions (issue #7) — the agent's accumulated `context.md`
+ * (docs/ARCHITECTURE.md §5). One last-write-wins notes row per repo, read by the
+ * review unit's `read_conventions` tool. `ConventionStore` (in `core`) is the
+ * port; this is the table its Drizzle adapter upserts into.
+ */
+export const conventions = pgTable(
+  "conventions",
+  {
+    id: serial("id").primaryKey(),
+    owner: text("owner").notNull(),
+    repo: text("repo").notNull(),
+    notes: text("notes").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    repoUnique: unique("conventions_owner_repo_unique").on(table.owner, table.repo),
+  }),
+);
