@@ -60,6 +60,24 @@ export const badge: CSSProperties = {
   opacity: 0.8,
 };
 
+/**
+ * Shared progress-bar visuals. The riskiest-first swipe deck (#27) and the "Continue
+ * reviewing" dashboard (#29) both render a thin track with a brand-blue fill, so the
+ * track + fill colours live here once. Callers spread on top for context-specific
+ * tweaks (the deck animates the width; the dashboard row stretches the track with flex).
+ */
+export const progressTrack: CSSProperties = {
+  height: 6,
+  borderRadius: 999,
+  background: "#1f2933",
+  overflow: "hidden",
+};
+
+export const progressFill: CSSProperties = {
+  height: "100%",
+  background: "#2563eb",
+};
+
 export const primaryButton: CSSProperties = {
   display: "inline-block",
   padding: "0.7rem 1.1rem",

@@ -11,7 +11,7 @@ import {
 } from "react";
 import type { CardView, CodeLine } from "../../../../../../lib/codeWindow";
 import { deckProgress, resolveSwipe, swipeSentiment } from "../../../../../../lib/codeWindow";
-import { TIER_COLOR } from "../../../../../../lib/ui";
+import { TIER_COLOR, progressFill, progressTrack } from "../../../../../../lib/ui";
 
 /**
  * The swipe deck (issue #27) — the heart of the product. Renders a PR's deck as a
@@ -365,7 +365,8 @@ function ProgressBar({ done, total, percent }: { done: number; total: number; pe
         style={srOnly}
       />
       <div style={progressTrack} aria-hidden="true">
-        <div style={{ ...progressFill, width: `${percent}%` }} />
+        {/* Animate the fill width so the bar eases forward on each swipe. */}
+        <div style={{ ...progressFill, width: `${percent}%`, transition: "width 200ms ease" }} />
       </div>
     </div>
   );
@@ -539,17 +540,4 @@ const srOnly: CSSProperties = {
   clip: "rect(0 0 0 0)",
   whiteSpace: "nowrap",
   border: 0,
-};
-
-const progressTrack: CSSProperties = {
-  height: 6,
-  borderRadius: 999,
-  background: "#1f2933",
-  overflow: "hidden",
-};
-
-const progressFill: CSSProperties = {
-  height: "100%",
-  background: "#2563eb",
-  transition: "width 200ms ease",
 };

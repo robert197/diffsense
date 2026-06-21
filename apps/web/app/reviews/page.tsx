@@ -1,7 +1,16 @@
-import type { CSSProperties } from "react";
 import { requireSession } from "../../lib/auth/session";
+import { deckProgress } from "../../lib/codeWindow";
 import { type InProgressReview, listInProgress } from "../../lib/reviewProgress";
-import { badge, list, muted, page, relativeTime, row } from "../../lib/ui";
+import {
+  badge,
+  list,
+  muted,
+  page,
+  progressFill,
+  progressTrack,
+  relativeTime,
+  row,
+} from "../../lib/ui";
 
 /**
  * The "Continue reviewing" dashboard (issue #29). Lists the signed-in reviewer's
@@ -49,7 +58,7 @@ export default async function ReviewsPage() {
 }
 
 function ReviewRow({ review }: { review: InProgressReview }) {
-  const percent = review.total === 0 ? 0 : Math.round((review.reviewed / review.total) * 100);
+  const { percent } = deckProgress(review.reviewed, review.total);
   return (
     <a href={`/pr/${review.owner}/${review.repo}/${review.prNumber}/deck`} style={row}>
       <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
@@ -60,7 +69,8 @@ function ReviewRow({ review }: { review: InProgressReview }) {
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginTop: "0.5rem" }}>
-        <div style={progressTrack} aria-hidden="true">
+        {/* Stretch the shared track across the row with flex; the fill is the brand bar. */}
+        <div style={{ ...progressTrack, flex: 1 }} aria-hidden="true">
           <div style={{ ...progressFill, width: `${percent}%` }} />
         </div>
         <span style={{ ...muted, whiteSpace: "nowrap" }}>
@@ -75,16 +85,3 @@ function ReviewRow({ review }: { review: InProgressReview }) {
     </a>
   );
 }
-
-const progressTrack: CSSProperties = {
-  flex: 1,
-  height: 6,
-  borderRadius: 999,
-  background: "#1f2933",
-  overflow: "hidden",
-};
-
-const progressFill: CSSProperties = {
-  height: "100%",
-  background: "#2563eb",
-};

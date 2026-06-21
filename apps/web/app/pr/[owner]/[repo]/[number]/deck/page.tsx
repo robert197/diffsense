@@ -44,26 +44,33 @@ export default async function DeckPage({ params }: { params: Promise<Params> }) 
   const language = resolveLanguageCookie((await cookies()).get(LANGUAGE_COOKIE)?.value);
   const deck = Number.isInteger(prNumber) ? await getLatestDeck({ owner, repo, prNumber }) : null;
 
-  // Translate the cards' prose into the reviewer's language (a no-op for English,
-  // graceful English fallback on any failure). Only explanation + suggestions change.
-  const cards = deck ? await localizeDeckCards(deck.cards, language, { owner, repo }) : [];
+  // Everything below hangs off the loaded deck and is mutually independent, so run it
+  // concurrently rather than chaining the awaits:
+  //  - the cards' prose translated into the reviewer's language (DB + maybe LLM; a
+  //    no-op for English, graceful English fallback on failure — only prose changes),
+  //  - this reviewer's persisted decisions for the deck's head SHA (issue #29),
+  //  - the live-head staleness check (one GitHub round-trip — AC#5).
+  // Keeping the GitHub call off the critical path means it overlaps the translation
+  // rather than adding to it.
+  const [cards, decisions, stale] = deck
+    ? await Promise.all([
+        localizeDeckCards(deck.cards, language, { owner, repo }),
+        getDecidedFingerprints({
+          githubUserId: session.userId,
+          owner,
+          repo,
+          prNumber,
+          headSha: deck.headSha,
+        }),
+        resolveStaleDeck(session, owner, repo, prNumber, deck.headSha),
+      ])
+    : ([[], [], false] as [Card[], CardDecision[], boolean]);
 
-  // Resume state (issue #29): read this reviewer's persisted decisions for the deck's
-  // head SHA and resolve where to pick up + the prior tally. A divergent live head SHA
-  // means the deck was built against an earlier commit (the re-process path).
-  const decisions = deck
-    ? await getDecidedFingerprints({
-        githubUserId: session.userId,
-        owner,
-        repo,
-        prNumber,
-        headSha: deck.headSha,
-      })
-    : [];
+  // A divergent live head SHA means the deck was built against an earlier commit (the
+  // re-process path); the resume index + prior tally come from the decisions above.
   const resume = deck
     ? computeResume(deck.cards, decisions)
     : { index: 0, counts: { up: 0, down: 0 } };
-  const stale = deck ? await resolveStaleDeck(session, owner, repo, prNumber, deck.headSha) : false;
 
   return (
     <main style={page}>
@@ -118,19 +125,17 @@ function computeResume(
   decisions: CardDecision[],
 ): { index: number; counts: { up: number; down: number } } {
   const deckFingerprints = new Set(cards.map((c) => c.fingerprint));
-  const counts = decisions.reduce(
-    (acc, d) => {
-      if (deckFingerprints.has(d.fingerprint)) {
-        acc[d.decision] += 1;
-      }
-      return acc;
-    },
-    { up: 0, down: 0 },
-  );
-  const { nextIndex } = resumeState(
-    cards,
-    decisions.map((d) => d.fingerprint),
-  );
+  const counts = { up: 0, down: 0 };
+  const decided = new Set<string>();
+  for (const d of decisions) {
+    // Only count decisions whose card is still in this deck, so the tally reflects the
+    // resumed work without inflating from decisions made on a different head SHA.
+    if (deckFingerprints.has(d.fingerprint)) {
+      counts[d.decision] += 1;
+      decided.add(d.fingerprint);
+    }
+  }
+  const { nextIndex } = resumeState(cards, decided);
   return { index: nextIndex, counts };
 }
 
