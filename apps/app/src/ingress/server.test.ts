@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import type { Deck, DeckRef } from "@diffsense/core";
 import { describe, expect, it, vi } from "vitest";
 import openedFixture from "../../test/fixtures/pull_request.opened.json" with { type: "json" };
 import synchronizeFixture from "../../test/fixtures/pull_request.synchronize.json" with {
@@ -212,6 +213,150 @@ describe("ingress /reactions (R3)", () => {
     const app = createServer({ webhookSecret: SECRET, enqueue, recordReaction });
 
     const res = await app.request(post(validQuery));
+
+    expect(res.status).toBe(503);
+  });
+});
+
+describe("ingress POST /decks (#26)", () => {
+  const jsonPost = (body: unknown) =>
+    new Request("http://localhost/decks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  const validBody = { owner: "octo-org", repo: "demo", prNumber: 42, installationId: 12345 };
+
+  it("enqueues an on-demand review job and acks 202", async () => {
+    const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {});
+    const app = createServer({ webhookSecret: SECRET, enqueue });
+
+    const res = await app.request(jsonPost(validBody));
+
+    expect(res.status).toBe(202);
+    expect(enqueue).toHaveBeenCalledOnce();
+    const ref = enqueue.mock.calls[0]?.[0] as PrRef;
+    expect(ref).toMatchObject({
+      owner: "octo-org",
+      repo: "demo",
+      prNumber: 42,
+      installationId: 12345,
+      action: "synchronize",
+    });
+    expect(ref.deliveryId).toMatch(/^ondemand-/);
+  });
+
+  it("rejects a malformed body with 400 and does not enqueue", async () => {
+    const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {});
+    const app = createServer({ webhookSecret: SECRET, enqueue });
+
+    const res = await app.request(jsonPost({ owner: "o", repo: "r" }));
+
+    expect(res.status).toBe(400);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-JSON body with 400 and does not enqueue", async () => {
+    const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {});
+    const app = createServer({ webhookSecret: SECRET, enqueue });
+
+    const res = await app.request(
+      new Request("http://localhost/decks", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "not json",
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("returns 503 when the queue is unavailable", async () => {
+    const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {
+      throw new Error("redis down");
+    });
+    const app = createServer({ webhookSecret: SECRET, enqueue });
+
+    const res = await app.request(jsonPost(validBody));
+
+    expect(res.status).toBe(503);
+  });
+});
+
+describe("ingress GET /decks (#26)", () => {
+  const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {});
+  const deck: Deck = {
+    owner: "octo-org",
+    repo: "demo",
+    prNumber: 42,
+    headSha: "abc123",
+    cards: [
+      {
+        fingerprint: "fp-a",
+        file: "src/auth.ts",
+        tier: "High",
+        rank: 0,
+        riskScore: 4.2,
+        highlights: [{ side: "R", start: 2, end: 4 }],
+        suggestions: ["checkToken() is never awaited"],
+        explanation: "Adds a token check.",
+      },
+    ],
+  };
+  const query = "owner=octo-org&repo=demo&pr=42&sha=abc123";
+
+  it("returns the persisted deck as JSON", async () => {
+    const getDeck = vi.fn<(ref: DeckRef) => Promise<Deck | null>>(async () => deck);
+    const app = createServer({ webhookSecret: SECRET, enqueue, getDeck });
+
+    const res = await app.request(`/decks?${query}`);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(deck);
+    expect(getDeck).toHaveBeenCalledWith({
+      owner: "octo-org",
+      repo: "demo",
+      prNumber: 42,
+      headSha: "abc123",
+    });
+  });
+
+  it("returns 404 when the deck does not exist", async () => {
+    const getDeck = vi.fn<(ref: DeckRef) => Promise<Deck | null>>(async () => null);
+    const app = createServer({ webhookSecret: SECRET, enqueue, getDeck });
+
+    const res = await app.request(`/decks?${query}`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("rejects a missing head SHA with 400", async () => {
+    const getDeck = vi.fn<(ref: DeckRef) => Promise<Deck | null>>(async () => deck);
+    const app = createServer({ webhookSecret: SECRET, enqueue, getDeck });
+
+    const res = await app.request("/decks?owner=octo-org&repo=demo&pr=42");
+
+    expect(res.status).toBe(400);
+    expect(getDeck).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when decks are not wired", async () => {
+    const app = createServer({ webhookSecret: SECRET, enqueue });
+
+    const res = await app.request(`/decks?${query}`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 503 when the store read fails", async () => {
+    const getDeck = vi.fn<(ref: DeckRef) => Promise<Deck | null>>(async () => {
+      throw new Error("db down");
+    });
+    const app = createServer({ webhookSecret: SECRET, enqueue, getDeck });
+
+    const res = await app.request(`/decks?${query}`);
 
     expect(res.status).toBe(503);
   });

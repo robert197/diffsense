@@ -1,4 +1,5 @@
 import { serve } from "@hono/node-server";
+import { createDrizzleDeckStore } from "./adapters/deckStore.js";
 import { createDrizzleReactionStore } from "./adapters/reactionStore.js";
 import { loadConfig } from "./config.js";
 import { createDb } from "./db/client.js";
@@ -36,10 +37,12 @@ if (role === "serve") {
   const producer = createProducer(config.redisUrl);
   const { db, client } = createDb(config.databaseUrl);
   const reactionStore = createDrizzleReactionStore(db);
+  const deckStore = createDrizzleDeckStore(db);
   const app = createServer({
     webhookSecret: config.githubWebhookSecret,
     enqueue: producer.enqueue,
     recordReaction: reactionStore.record,
+    getDeck: deckStore.get,
   });
   serve({ fetch: app.fetch, port: config.port });
   console.log(`diffsense serve listening on :${config.port}`);

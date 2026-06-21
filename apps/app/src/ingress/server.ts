@@ -1,9 +1,27 @@
-import { type ChunkReaction, ChunkReactionSchema } from "@diffsense/core";
+import { randomUUID } from "node:crypto";
+import { type ChunkReaction, ChunkReactionSchema, type Deck, type DeckRef } from "@diffsense/core";
 import { Webhooks } from "@octokit/webhooks";
 import { Hono } from "hono";
+import { z } from "zod";
 import type { PrRef } from "../types.js";
 
 const MAX_BODY_BYTES = 5_000_000;
+
+/** Body of an on-demand deck request (issue #26): which PR to process. */
+const DeckRequestSchema = z.object({
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  prNumber: z.number().int().positive(),
+  installationId: z.number().int().positive(),
+});
+
+/** Query of a deck re-fetch (issue #26): the PR + head SHA the deck is keyed to. */
+const DeckQuerySchema = z.object({
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  prNumber: z.coerce.number().int().positive(),
+  headSha: z.string().min(1),
+});
 
 export interface IngressDeps {
   webhookSecret: string;
@@ -14,6 +32,12 @@ export interface IngressDeps {
    * wired a store does not advertise a broken link.
    */
   recordReaction?: (reaction: ChunkReaction) => Promise<void>;
+  /**
+   * Re-fetch a persisted deck of cards (issue #26). Optional: when absent, the
+   * `GET /decks` route is inert (404) — a deployment with no DeckStore wired
+   * does not advertise a read it cannot serve.
+   */
+  getDeck?: (ref: DeckRef) => Promise<Deck | null>;
 }
 
 /** Minimal shape of the `pull_request` webhook payload fields we consume. */
@@ -115,11 +139,76 @@ function renderConfirmPage(reaction: ChunkReaction): string {
  * (KTD4), and acks 202 fast. Signature failures → 401. The producer is
  * injected so tests run without Redis.
  */
-export function createServer({ webhookSecret, enqueue, recordReaction }: IngressDeps): Hono {
+export function createServer({
+  webhookSecret,
+  enqueue,
+  recordReaction,
+  getDeck,
+}: IngressDeps): Hono {
   const app = new Hono();
   const webhooks = new Webhooks({ secret: webhookSecret });
 
   app.get("/healthz", (c) => c.json({ ok: true }));
+
+  // On-demand deck processing (issue #26). A reviewer opening a PR in the web app
+  // triggers a review run here, decoupled from the GitHub webhook: it enqueues the
+  // same job the webhook does (the worker ranks, reviews, and persists the deck),
+  // then acks 202 — the deck is read back via `GET /decks` once the run lands.
+  app.post("/decks", async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    const parsed = DeckRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "invalid deck request" }, 400);
+    }
+    const { owner, repo, prNumber, installationId } = parsed.data;
+    try {
+      await enqueue({
+        owner,
+        repo,
+        prNumber,
+        installationId,
+        action: "synchronize",
+        deliveryId: `ondemand-${randomUUID()}`,
+      });
+    } catch (err) {
+      console.error("failed to enqueue deck job:", err);
+      return c.json({ error: "queue unavailable" }, 503);
+    }
+    return c.json({ accepted: true }, 202);
+  });
+
+  // Re-fetch the persisted deck for a PR at a head SHA (issue #26). Keyed by head
+  // SHA so the swipe UI resumes the exact deck it was built against.
+  app.get("/decks", async (c) => {
+    if (!getDeck) {
+      return c.json({ error: "decks not enabled" }, 404);
+    }
+    const parsed = DeckQuerySchema.safeParse({
+      owner: c.req.query("owner"),
+      repo: c.req.query("repo"),
+      prNumber: c.req.query("pr"),
+      headSha: c.req.query("sha"),
+    });
+    if (!parsed.success) {
+      return c.json({ error: "invalid deck query" }, 400);
+    }
+    let deck: Deck | null;
+    try {
+      deck = await getDeck(parsed.data);
+    } catch (err) {
+      console.error("failed to read deck:", err);
+      return c.json({ error: "could not read deck" }, 503);
+    }
+    if (!deck) {
+      return c.json({ error: "deck not found" }, 404);
+    }
+    return c.json(deck);
+  });
 
   // Reviewer feedback (issue #3). The 👍/👎 links in the ranked comment point
   // here. The write is a POST, not a GET: a GET that writes gets fired

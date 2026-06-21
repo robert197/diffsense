@@ -9,6 +9,7 @@ import { Redis } from "ioredis";
 import { App } from "octokit";
 import { createAstGrepCodeSearch } from "../adapters/codeSearch.js";
 import { createDrizzleConventionStore } from "../adapters/conventionStore.js";
+import { createDrizzleDeckStore } from "../adapters/deckStore.js";
 import { createDrizzleFindingStore } from "../adapters/findingStore.js";
 import { createDrizzleFingerprintCache } from "../adapters/fingerprintCache.js";
 import type { GitHubClient } from "../adapters/github.js";
@@ -17,6 +18,7 @@ import type { Config } from "../config.js";
 import { createDb } from "../db/client.js";
 import { type PrRef, REVIEW_QUEUE_NAME } from "../types.js";
 import { type ReviewFindingsRunner, handlePullRequestEvent } from "./handlePullRequestEvent.js";
+import { processPrIntoDeck } from "./processPrIntoDeck.js";
 
 /** Source files worth feeding ast-grep, and the per-PR fetch cap. */
 const SOURCE_EXT = /\.(c|m)?[jt]sx?$/i;
@@ -83,6 +85,7 @@ function buildReviewSupport(config: Config): ReviewSupport | null {
   const cache = createDrizzleFingerprintCache(db);
   const findingStore = createDrizzleFindingStore(db);
   const conventionStore = createDrizzleConventionStore(db);
+  const deckStore = createDrizzleDeckStore(db);
 
   return {
     makeRunner(octokit, ref): ReviewFindingsRunner {
@@ -103,7 +106,24 @@ function buildReviewSupport(config: Config): ReviewSupport | null {
           conventionStore,
           repo: { owner, repo },
         });
-        return reviewAndPersistFindings(ctx, { llm, cache, findingStore, codeSearch, tools });
+        const findings = await reviewAndPersistFindings(ctx, {
+          llm,
+          cache,
+          findingStore,
+          codeSearch,
+          tools,
+        });
+        // Fold the ranking + findings into an ordered deck for the swipe UI
+        // (#26), keyed to the head SHA. Needs the head commit to key against; a
+        // PR with no resolvable head still ships the findings above.
+        if (headSha) {
+          await processPrIntoDeck(
+            { owner, repo, prNumber: ref.prNumber, headSha, diff: ctx.diff },
+            findings,
+            deckStore,
+          );
+        }
+        return findings;
       };
     },
   };
