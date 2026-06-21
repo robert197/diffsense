@@ -25,6 +25,7 @@ export async function recordSwipe(formData: FormData): Promise<void> {
     !owner ||
     !repo ||
     !Number.isInteger(prNumber) ||
+    prNumber <= 0 ||
     !fingerprint ||
     !TIERS.has(tier) ||
     !SENTIMENTS.has(sentiment)

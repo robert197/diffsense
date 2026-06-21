@@ -1,4 +1,13 @@
-import { index, integer, jsonb, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
+import {
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  serial,
+  text,
+  timestamp,
+  unique,
+} from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
@@ -52,6 +61,15 @@ export const decks = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
+    // Lockstep with apps/app/src/db/schema.ts: the app's migration owns the
+    // constraint, but the web declaration mirrors it so the derived shape stays
+    // faithful to the authoritative one.
+    deckUnique: unique("decks_owner_repo_pr_head_unique").on(
+      table.owner,
+      table.repo,
+      table.prNumber,
+      table.headSha,
+    ),
     prIdx: index("decks_pr_idx").on(table.owner, table.repo, table.prNumber),
   }),
 );

@@ -50,6 +50,11 @@ describe("buildCodeWindow", () => {
     expect(buildCodeWindow(lines, [])).toBeNull();
     expect(buildCodeWindow([], [R(1, 2)])).toBeNull();
   });
+
+  it("strips a trailing carriage return from CRLF files", () => {
+    const window = buildCodeWindow("a\r\nb\r\nc".split("\n"), [R(2, 2)], 0);
+    expect(window).toEqual([{ number: 2, text: "b", highlighted: true }]);
+  });
 });
 
 describe("deletionSummary", () => {

@@ -89,7 +89,9 @@ export function buildCodeWindow(
   const lines: CodeLine[] = [];
   for (const window of merged) {
     for (let n = window.start; n <= window.end; n++) {
-      lines.push({ number: n, text: fileLines[n - 1] ?? "", highlighted: isHighlighted(n) });
+      // Strip a trailing CR so CRLF files don't render a stray carriage return.
+      const text = (fileLines[n - 1] ?? "").replace(/\r$/, "");
+      lines.push({ number: n, text, highlighted: isHighlighted(n) });
     }
   }
   return lines.length > 0 ? lines : null;

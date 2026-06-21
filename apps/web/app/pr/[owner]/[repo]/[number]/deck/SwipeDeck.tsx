@@ -47,7 +47,6 @@ export function SwipeDeck({ cards, owner, repo, prNumber, recordSwipe }: SwipeDe
   const [leaving, setLeaving] = useState<Direction | null>(null);
   const [, startWrite] = useTransition();
 
-  const cardRef = useRef<HTMLDivElement | null>(null);
   const dragStart = useRef<number | null>(null);
   const advanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -184,7 +183,6 @@ export function SwipeDeck({ cards, owner, repo, prNumber, recordSwipe }: SwipeDe
         {cards[index + 1] && <div style={peekStyle} aria-hidden="true" />}
 
         <div
-          ref={cardRef}
           style={{ ...cardStyle, ...topStyle }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
