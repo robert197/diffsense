@@ -124,15 +124,17 @@ function computeResume(
   cards: Card[],
   decisions: CardDecision[],
 ): { index: number; counts: { up: number; down: number } } {
-  const deckFingerprints = new Set(cards.map((c) => c.fingerprint));
+  const decisionByFingerprint = new Map(decisions.map((d) => [d.fingerprint, d.decision]));
   const counts = { up: 0, down: 0 };
   const decided = new Set<string>();
-  for (const d of decisions) {
-    // Only count decisions whose card is still in this deck, so the tally reflects the
-    // resumed work without inflating from decisions made on a different head SHA.
-    if (deckFingerprints.has(d.fingerprint)) {
-      counts[d.decision] += 1;
-      decided.add(d.fingerprint);
+  // Walk the cards (not the decisions) so the tally counts per card and stays
+  // consistent with `resumeState`'s reviewed count; decisions on a card not in this
+  // deck (e.g. from a different head SHA) are ignored.
+  for (const card of cards) {
+    const decision = decisionByFingerprint.get(card.fingerprint);
+    if (decision) {
+      counts[decision] += 1;
+      decided.add(card.fingerprint);
     }
   }
   const { nextIndex } = resumeState(cards, decided);
