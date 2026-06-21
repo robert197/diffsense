@@ -149,6 +149,40 @@ export const webSessions = pgTable(
 );
 
 /**
+ * Built decks of review cards (issue #26, docs/ARCHITECTURE.md §2–§3) — the swipe
+ * UI's read-model. One row per PR + head SHA: the deterministic ranking folded
+ * with the agentic review findings into an ordered set of cards (risk score,
+ * highlighted line ranges, suggestions, plain-language explanation). Keyed by head
+ * SHA so a new push gets a fresh deck and never overwrites the one a reviewer is
+ * mid-swipe through; re-running the engine on the same head upserts in place.
+ * `DeckStore` (in `core`) is the port; this is the table its Drizzle adapter
+ * writes and reads. The `cards` JSON is re-validated against `DeckSchema` on read.
+ */
+export const decks = pgTable(
+  "decks",
+  {
+    id: serial("id").primaryKey(),
+    owner: text("owner").notNull(),
+    repo: text("repo").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    headSha: text("head_sha").notNull(),
+    /** The ordered `Card[]`, stored as JSON and re-validated on read. */
+    cards: jsonb("cards").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    deckUnique: unique("decks_owner_repo_pr_head_unique").on(
+      table.owner,
+      table.repo,
+      table.prNumber,
+      table.headSha,
+    ),
+    // Listing a PR's decks across head SHAs stays an index scan.
+    prIdx: index("decks_pr_idx").on(table.owner, table.repo, table.prNumber),
+  }),
+);
+
+/**
  * Per-PR inference cost (issue #12, docs/ARCHITECTURE.md §2) — product
  * observability. One append-only row per review run records the summed token
  * usage, the USD cost (token usage × per-model rate), and whether the run crossed

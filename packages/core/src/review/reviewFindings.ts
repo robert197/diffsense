@@ -1,4 +1,5 @@
 import parseDiff from "parse-diff";
+import { githubPath, hunkPatch } from "../diff/hunk.js";
 import type { CodeSearch } from "../ports/codeSearch.js";
 import type { FindingStore } from "../ports/findingStore.js";
 import type { FingerprintCache } from "../ports/fingerprintCache.js";
@@ -72,11 +73,11 @@ export function buildReviewChunks(diff: string, meta: PrMeta): ReviewChunk[] {
       }
       const side = added > 0 ? "R" : "L";
       const line = added > 0 ? chunk.newStart : chunk.oldStart;
-      const patch = [chunk.content, ...chunk.changes.map((c) => c.content)].join("\n");
       chunks.push({
         file: path,
         tier: tierByKey.get(`${path}\n${side}\n${line}`) ?? "Low",
-        patch,
+        // Shared with `buildDeck` so both fingerprint the identical patch string.
+        patch: hunkPatch(chunk),
       });
     }
   }
@@ -145,11 +146,4 @@ export function extractSymbols(patch: string): string[] {
     }
   }
   return [...symbols];
-}
-
-/** The path GitHub uses for the file: the new path, or the old one if deleted. */
-function githubPath(file: parseDiff.File): string | null {
-  const to = file.to && file.to !== "/dev/null" ? file.to : null;
-  const from = file.from && file.from !== "/dev/null" ? file.from : null;
-  return to ?? from;
 }

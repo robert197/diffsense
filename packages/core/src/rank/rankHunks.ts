@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import parseDiff from "parse-diff";
 import { type DemotionReason, classifyDemotion } from "../diff/demote.js";
+import { githubPath } from "../diff/hunk.js";
 
 /**
  * Structural risk ranking for PR hunks — pure, deterministic, no LLM.
@@ -314,13 +315,6 @@ function capitalize(value: string): string {
 /** Locale-independent string order, so the tiebreak is byte-deterministic. */
 function byteCompare(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
-}
-
-/** The path GitHub uses for the file: the new path, or the old one if deleted. */
-function githubPath(file: parseDiff.File): string | null {
-  const to = file.to && file.to !== "/dev/null" ? file.to : null;
-  const from = file.from && file.from !== "/dev/null" ? file.from : null;
-  return to ?? from;
 }
 
 function riskCategory(path: string): RiskCategory | null {

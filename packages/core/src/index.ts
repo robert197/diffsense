@@ -3,6 +3,7 @@ export { type DemotionReason, classifyDemotion } from "./diff/demote.js";
 export type { CodeReference, CodeSearch } from "./ports/codeSearch.js";
 export type { ConventionStore, RepoRef } from "./ports/conventionStore.js";
 export type { CostStore, PrCostRecord } from "./ports/costStore.js";
+export type { DeckRef, DeckStore } from "./ports/deckStore.js";
 export type { FingerprintCache } from "./ports/fingerprintCache.js";
 export type { FindingPrRef, FindingStore } from "./ports/findingStore.js";
 export type {
@@ -46,6 +47,7 @@ export {
 } from "./render/renderComment.js";
 export { MAX_LISTED, renderRankedComment } from "./render/renderRankedComment.js";
 export { type ScopeCreepPorts, detectScopeCreep } from "./scope/detectScopeCreep.js";
+export { buildDeck } from "./deck/buildDeck.js";
 export { fingerprintChunk } from "./review/fingerprint.js";
 export {
   type ReviewChunk,
@@ -72,6 +74,14 @@ export {
   NoInput,
   ReadFileInput,
 } from "./review/tools.js";
+export {
+  type Card,
+  CardSchema,
+  type Deck,
+  DeckSchema,
+  type HighlightRange,
+  HighlightRangeSchema,
+} from "./schemas/card.js";
 export {
   type ChunkReview,
   ChunkReviewSchema,
