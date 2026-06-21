@@ -1,0 +1,182 @@
+/**
+ * Minimal GitHub REST client for the reviewer entry path (issue #25). Bound to a
+ * user-to-server access token, it reads the identity, the App installations and
+ * repos the user can access, and a repo's open PRs. Plain `fetch` (injectable for
+ * tests) instead of Octokit — this slice needs four read calls, and `apps/web`
+ * keeps its dependency surface minimal. GitHub is the product's domain, so a
+ * GitHub-specific client here does not touch the provider-agnostic (LLM) rule.
+ */
+
+import type { FetchLike } from "./auth/oauth";
+
+const API_BASE = "https://api.github.com";
+const API_VERSION = "2022-11-28";
+const PER_PAGE = 100;
+// Bound pagination so a huge installation can't loop unbounded. Repos/PRs beyond
+// this are not shown this slice (see Scope Boundaries); pagination UI is deferred.
+const MAX_PAGES = 5;
+const OPEN_PR_PER_PAGE = 50;
+
+/** Thrown when GitHub rejects the token (401) — the caller clears the session. */
+export class GitHubAuthError extends Error {
+  constructor(message = "github authentication failed") {
+    super(message);
+    this.name = "GitHubAuthError";
+  }
+}
+
+export interface GitHubUser {
+  id: number;
+  login: string;
+  avatarUrl: string | null;
+}
+
+export interface Installation {
+  id: number;
+  account: string;
+  avatarUrl: string | null;
+  accountType: string;
+}
+
+export interface Repository {
+  owner: string;
+  name: string;
+  fullName: string;
+  private: boolean;
+  pushedAt: string | null;
+}
+
+export interface PullRequest {
+  number: number;
+  title: string;
+  author: string | null;
+  updatedAt: string;
+  draft: boolean;
+  url: string;
+}
+
+export interface GitHubClient {
+  getAuthenticatedUser(): Promise<GitHubUser>;
+  listInstallations(): Promise<Installation[]>;
+  listInstallationRepositories(installationId: number): Promise<Repository[]>;
+  listOpenPullRequests(owner: string, repo: string): Promise<PullRequest[]>;
+}
+
+/** Construct a token-bound GitHub client. `fetchImpl` is injectable for tests. */
+export function createGitHubClient(
+  accessToken: string,
+  fetchImpl: FetchLike = globalThis.fetch,
+): GitHubClient {
+  async function get(path: string): Promise<unknown> {
+    const res = await fetchImpl(`${API_BASE}${path}`, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": API_VERSION,
+      },
+    });
+    if (res.status === 401) {
+      throw new GitHubAuthError();
+    }
+    if (!res.ok) {
+      throw new Error(`github ${path} returned ${res.status}`);
+    }
+    return res.json();
+  }
+
+  return {
+    async getAuthenticatedUser(): Promise<GitHubUser> {
+      return mapUser(await get("/user"));
+    },
+
+    async listInstallations(): Promise<Installation[]> {
+      const out: Installation[] = [];
+      for (let page = 1; page <= MAX_PAGES; page++) {
+        const body = asRecord(await get(`/user/installations?per_page=${PER_PAGE}&page=${page}`));
+        const items = asArray(body.installations);
+        out.push(...items.map(mapInstallation));
+        if (items.length < PER_PAGE) {
+          break;
+        }
+      }
+      return out;
+    },
+
+    async listInstallationRepositories(installationId: number): Promise<Repository[]> {
+      const out: Repository[] = [];
+      for (let page = 1; page <= MAX_PAGES; page++) {
+        const body = asRecord(
+          await get(
+            `/user/installations/${installationId}/repositories?per_page=${PER_PAGE}&page=${page}`,
+          ),
+        );
+        const items = asArray(body.repositories);
+        out.push(...items.map(mapRepository));
+        if (items.length < PER_PAGE) {
+          break;
+        }
+      }
+      return out;
+    },
+
+    async listOpenPullRequests(owner: string, repo: string): Promise<PullRequest[]> {
+      const path = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(
+        repo,
+      )}/pulls?state=open&sort=updated&direction=desc&per_page=${OPEN_PR_PER_PAGE}`;
+      return asArray(await get(path)).map(mapPullRequest);
+    },
+  };
+}
+
+function mapUser(raw: unknown): GitHubUser {
+  const data = asRecord(raw);
+  return {
+    id: Number(data.id),
+    login: String(data.login ?? ""),
+    avatarUrl: typeof data.avatar_url === "string" ? data.avatar_url : null,
+  };
+}
+
+function mapInstallation(raw: unknown): Installation {
+  const data = asRecord(raw);
+  const account = asRecord(data.account);
+  return {
+    id: Number(data.id),
+    account: String(account.login ?? ""),
+    avatarUrl: typeof account.avatar_url === "string" ? account.avatar_url : null,
+    accountType: String(account.type ?? "User"),
+  };
+}
+
+function mapRepository(raw: unknown): Repository {
+  const data = asRecord(raw);
+  const owner = asRecord(data.owner);
+  return {
+    owner: String(owner.login ?? ""),
+    name: String(data.name ?? ""),
+    fullName: String(data.full_name ?? ""),
+    private: Boolean(data.private),
+    pushedAt: typeof data.pushed_at === "string" ? data.pushed_at : null,
+  };
+}
+
+function mapPullRequest(raw: unknown): PullRequest {
+  const data = asRecord(raw);
+  const user = asRecord(data.user);
+  return {
+    number: Number(data.number),
+    title: String(data.title ?? ""),
+    author: typeof user.login === "string" ? user.login : null,
+    updatedAt: String(data.updated_at ?? ""),
+    draft: Boolean(data.draft),
+    url: String(data.html_url ?? ""),
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}

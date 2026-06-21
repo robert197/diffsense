@@ -29,7 +29,7 @@ TypeScript pnpm monorepo, self-hosted via Docker:
 - `packages/core` — pure domain logic + Zod schemas + port interfaces. **No vendor SDK imports.**
 - `packages/llm` — provider-agnostic LLM adapter (stub today; AI SDK in #8).
 - `apps/app` — Hono webhook ingress · BullMQ queue/worker · pipeline · adapters (Octokit, Drizzle).
-- `apps/web` — Next.js read-only card view (stub today; #13).
+- `apps/web` — Next.js reviewer surface: GitHub sign-in + repo/PR picker (#25) and the read-only card view (#13).
 
 A webhook hits the Hono ingress, which verifies the signature and enqueues a job.
 A worker consumes it and (this slice) posts a single placeholder comment — the
@@ -79,6 +79,30 @@ receive real webhooks:
 
 Put all three (`GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`) plus
 the infra URLs into `.env` (see [`.env.example`](.env.example)).
+
+## Reviewer sign-in + repo/PR picker (apps/web, #25)
+
+The web app is the reviewer's entry path: sign in with GitHub, pick a repo from the
+GitHub App installations you can access, see its open PRs, and click through to the
+review view. It uses the **same GitHub App** via its user-authorization (OAuth) flow
+— no second app to register:
+
+1. On the GitHub App: enable **Request user authorization (OAuth) during
+   installation**, set the **Callback URL** to `${WEB_BASE_URL}/api/auth/callback`
+   (e.g. `http://localhost:3001/api/auth/callback`), and **generate a client
+   secret**.
+2. Put the App's **Client ID** → `GITHUB_OAUTH_CLIENT_ID`, the **client secret** →
+   `GITHUB_OAUTH_CLIENT_SECRET`, a random **`SESSION_SECRET`** (encrypts the stored
+   GitHub tokens at rest), and your public **`WEB_BASE_URL`** into `.env`.
+
+Sessions persist in the shared Postgres (`web_sessions` table, migration `0006`);
+the cookie holds only an opaque token and the GitHub tokens are encrypted at rest.
+All secrets come from env — nothing is hard-coded, consistent with the self-host and
+provider-independence rules.
+
+Flow: `/login` → GitHub authorize → `/api/auth/callback` → `/repos` (installations +
+repos) → `/repos/<owner>/<repo>/pulls` (open PRs) → `/pr/<owner>/<repo>/<number>`
+(review view).
 
 ### Local webhook delivery via smee
 

@@ -45,7 +45,26 @@ export const reactions = pgTable("reactions", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-const schema = { findings, reactions };
+/**
+ * Reviewer web session (issue #25). Mirrors the `web_sessions` table declared in
+ * `apps/app/src/db/schema.ts` (migration `0006_web_sessions`). `apps/web` owns the
+ * only reader/writer; the cookie carries an opaque token and this row is keyed by
+ * its SHA-256 hash, with the GitHub tokens encrypted at rest.
+ */
+export const webSessions = pgTable("web_sessions", {
+  tokenHash: text("token_hash").primaryKey(),
+  githubUserId: integer("github_user_id").notNull(),
+  githubLogin: text("github_login").notNull(),
+  githubAvatarUrl: text("github_avatar_url"),
+  accessTokenEncrypted: text("access_token_encrypted").notNull(),
+  accessTokenExpiresAt: timestamp("access_token_expires_at", { withTimezone: true }),
+  refreshTokenEncrypted: text("refresh_token_encrypted"),
+  refreshTokenExpiresAt: timestamp("refresh_token_expires_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+});
+
+const schema = { findings, reactions, webSessions };
 
 let cached: ReturnType<typeof drizzle<typeof schema>> | null = null;
 

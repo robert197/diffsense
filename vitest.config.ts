@@ -9,7 +9,12 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["packages/*/src/**/*.test.ts", "apps/*/src/**/*.test.ts"],
+    include: [
+      "packages/*/src/**/*.test.ts",
+      "apps/*/src/**/*.test.ts",
+      // apps/web uses `lib/` (not `src/`); its pure auth/github helpers test here.
+      "apps/web/lib/**/*.test.ts",
+    ],
     environment: "node",
   },
 });

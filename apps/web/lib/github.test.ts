@@ -1,0 +1,130 @@
+import { describe, expect, it, vi } from "vitest";
+import { GitHubAuthError, createGitHubClient } from "./github";
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+describe("createGitHubClient", () => {
+  it("sends the bearer token and maps the authenticated user", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ id: 42, login: "octocat", avatar_url: "https://a/octocat.png" }),
+    );
+    const client = createGitHubClient("gho_tok", fetchImpl as unknown as typeof fetch);
+    const user = await client.getAuthenticatedUser();
+
+    expect(user).toEqual({ id: 42, login: "octocat", avatarUrl: "https://a/octocat.png" });
+    const headers = (fetchImpl.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer gho_tok");
+  });
+
+  it("maps installations with account login/avatar/type", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({
+        total_count: 1,
+        installations: [
+          {
+            id: 7,
+            account: { login: "acme", avatar_url: "https://a/acme.png", type: "Organization" },
+          },
+        ],
+      }),
+    );
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    expect(await client.listInstallations()).toEqual([
+      { id: 7, account: "acme", avatarUrl: "https://a/acme.png", accountType: "Organization" },
+    ]);
+  });
+
+  it("follows a second page of installation repositories then stops", async () => {
+    const firstPage = {
+      total_count: 101,
+      repositories: Array.from({ length: 100 }, (_, i) => ({
+        name: `r${i}`,
+        full_name: `acme/r${i}`,
+        private: false,
+        pushed_at: "2026-06-01T00:00:00Z",
+        owner: { login: "acme" },
+      })),
+    };
+    const secondPage = {
+      total_count: 101,
+      repositories: [
+        {
+          name: "r100",
+          full_name: "acme/r100",
+          private: true,
+          pushed_at: null,
+          owner: { login: "acme" },
+        },
+      ],
+    };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(firstPage))
+      .mockResolvedValueOnce(jsonResponse(secondPage));
+
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    const repos = await client.listInstallationRepositories(7);
+
+    expect(repos).toHaveLength(101);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(repos[100]).toEqual({
+      owner: "acme",
+      name: "r100",
+      fullName: "acme/r100",
+      private: true,
+      pushedAt: null,
+    });
+  });
+
+  it("requests open PRs and maps number/title/author/draft", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse([
+        {
+          number: 3,
+          title: "Fix bug",
+          user: { login: "dev" },
+          updated_at: "2026-06-20T10:00:00Z",
+          draft: false,
+          html_url: "https://github.com/acme/web/pull/3",
+        },
+      ]),
+    );
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    const prs = await client.listOpenPullRequests("acme", "web");
+
+    expect(prs).toEqual([
+      {
+        number: 3,
+        title: "Fix bug",
+        author: "dev",
+        updatedAt: "2026-06-20T10:00:00Z",
+        draft: false,
+        url: "https://github.com/acme/web/pull/3",
+      },
+    ]);
+    expect(fetchImpl.mock.calls[0][0]).toContain("state=open");
+  });
+
+  it("returns an empty list when a repo has no open PRs", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse([]));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    expect(await client.listOpenPullRequests("acme", "web")).toEqual([]);
+  });
+
+  it("throws GitHubAuthError on 401", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ message: "Bad credentials" }, 401));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    await expect(client.getAuthenticatedUser()).rejects.toBeInstanceOf(GitHubAuthError);
+  });
+
+  it("throws a generic error on 500", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({}, 500));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    await expect(client.listInstallations()).rejects.toThrow(/500/);
+  });
+});
