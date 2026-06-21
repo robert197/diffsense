@@ -71,6 +71,13 @@
       "when": 1782604800000,
       "tag": "0009_review_progress",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1782691200000,
+      "tag": "0010_pr_comments",
+      "breakpoints": true
     }
   ]
 }

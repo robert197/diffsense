@@ -3,6 +3,7 @@
 import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
+  useActionState,
   useCallback,
   useEffect,
   useRef,
@@ -44,6 +45,17 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
 }
 
+/**
+ * The result of posting a PR comment from a card (issue #30), rendered by the
+ * composer via `useActionState`. Structurally matches the `postCardComment` action's
+ * return so the server action can be passed straight in as the `postComment` prop.
+ */
+export interface PostCommentResult {
+  ok: boolean;
+  error?: string;
+  comment?: { htmlUrl: string; kind: "review" | "issue" };
+}
+
 export interface SwipeDeckProps {
   cards: CardView[];
   owner: string;
@@ -56,6 +68,8 @@ export interface SwipeDeckProps {
   /** Prior 👍/👎 tally from persisted decisions, so the progress reflects resumed work. */
   initialCounts?: { up: number; down: number };
   recordSwipe: (formData: FormData) => Promise<void>;
+  /** Post a reviewer comment to the PR from a card (issue #30). */
+  postComment: (prev: PostCommentResult, formData: FormData) => Promise<PostCommentResult>;
 }
 
 export function SwipeDeck({
@@ -67,6 +81,7 @@ export function SwipeDeck({
   initialIndex = 0,
   initialCounts,
   recordSwipe,
+  postComment,
 }: SwipeDeckProps) {
   const [index, setIndex] = useState(initialIndex);
   const [counts, setCounts] = useState(initialCounts ?? { up: 0, down: 0 });
@@ -250,7 +265,15 @@ export function SwipeDeck({
           onLostPointerCapture={onLostPointerCapture}
         >
           {intent && <IntentBadge intent={intent} />}
-          <CardBody card={current} />
+          {/* Key per card so the composer's open/draft/result state resets on advance. */}
+          <CardBody
+            key={current.fingerprint}
+            card={current}
+            owner={owner}
+            repo={repo}
+            prNumber={prNumber}
+            postComment={postComment}
+          />
         </div>
       </div>
 
@@ -267,7 +290,19 @@ export function SwipeDeck({
   );
 }
 
-function CardBody({ card }: { card: CardView }) {
+function CardBody({
+  card,
+  owner,
+  repo,
+  prNumber,
+  postComment,
+}: {
+  card: CardView;
+  owner: string;
+  repo: string;
+  prNumber: number;
+  postComment: SwipeDeckProps["postComment"];
+}) {
   return (
     <article>
       <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "0.6rem" }}>
@@ -296,7 +331,110 @@ function CardBody({ card }: { card: CardView }) {
           </ul>
         </section>
       )}
+
+      <CommentComposer
+        card={card}
+        owner={owner}
+        repo={repo}
+        prNumber={prNumber}
+        postComment={postComment}
+      />
     </article>
+  );
+}
+
+/**
+ * Leave a comment on the PR straight from a card (issue #30). Reviewer-initiated and
+ * low-noise: the composer is collapsed behind a button so the card stays clean, and
+ * nothing posts until the reviewer clicks Post. Posting goes through the
+ * `postComment` server action (the `GitHubGateway` port); the result is rendered via
+ * `useActionState` — a link on success, a clear message on failure. Comments the
+ * reviewer already posted from this card are reflected above the composer.
+ *
+ * Keyed by `card.fingerprint` (in `SwipeDeck`'s render) so each card gets its own
+ * composer + action state and the form resets as the deck advances.
+ */
+function CommentComposer({
+  card,
+  owner,
+  repo,
+  prNumber,
+  postComment,
+}: {
+  card: CardView;
+  owner: string;
+  repo: string;
+  prNumber: number;
+  postComment: SwipeDeckProps["postComment"];
+}) {
+  const [open, setOpen] = useState(false);
+  const [state, formAction, pending] = useActionState(postComment, {
+    ok: false,
+  } as PostCommentResult);
+
+  const target = card.commentAnchored
+    ? `Posts a review comment on ${card.file} · ${card.highlightLabel}`
+    : "Posts a comment to the PR conversation";
+
+  return (
+    <section style={{ marginTop: "1rem", borderTop: "1px solid #1f2933", paddingTop: "0.85rem" }}>
+      {card.postedComments.length > 0 && (
+        <div style={{ marginBottom: "0.75rem" }}>
+          <h2 style={heading}>Posted to GitHub</h2>
+          <ul style={{ margin: 0, paddingLeft: "1.1rem", display: "grid", gap: "0.3rem" }}>
+            {card.postedComments.map((c) => (
+              <li key={c.htmlUrl} style={{ lineHeight: 1.45, fontSize: "0.82rem" }}>
+                <a href={c.htmlUrl} target="_blank" rel="noreferrer" style={postedLink}>
+                  {c.body.length > 80 ? `${c.body.slice(0, 80)}…` : c.body}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {!open ? (
+        <button type="button" style={composerToggle} onClick={() => setOpen(true)}>
+          💬 Comment on PR
+        </button>
+      ) : (
+        <form action={formAction}>
+          <input type="hidden" name="owner" value={owner} />
+          <input type="hidden" name="repo" value={repo} />
+          <input type="hidden" name="prNumber" value={prNumber} />
+          <input type="hidden" name="fingerprint" value={card.fingerprint} />
+          <p style={{ margin: "0 0 0.4rem", fontSize: "0.75rem", opacity: 0.6 }}>{target}</p>
+          <textarea
+            name="body"
+            required
+            rows={3}
+            placeholder="Leave a comment on this change…"
+            style={composerTextarea}
+          />
+          <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
+            <button type="submit" style={postButton} disabled={pending}>
+              {pending ? "Posting…" : "Post comment"}
+            </button>
+            <button type="button" style={cancelButton} onClick={() => setOpen(false)}>
+              Cancel
+            </button>
+          </div>
+          {state.ok && state.comment && (
+            <p style={{ margin: "0.5rem 0 0", fontSize: "0.82rem", color: "#34d399" }}>
+              Posted to GitHub ✓{" "}
+              <a href={state.comment.htmlUrl} target="_blank" rel="noreferrer" style={postedLink}>
+                View comment
+              </a>
+            </p>
+          )}
+          {!state.ok && state.error && (
+            <p role="alert" style={{ margin: "0.5rem 0 0", fontSize: "0.82rem", color: "#f87171" }}>
+              {state.error}
+            </p>
+          )}
+        </form>
+      )}
+    </section>
   );
 }
 
@@ -528,6 +666,59 @@ const fallbackBox: CSSProperties = {
   background: "#0b0d10",
   border: "1px dashed #374151",
   borderRadius: 8,
+};
+
+const composerToggle: CSSProperties = {
+  minHeight: 40,
+  padding: "0.5rem 0.9rem",
+  borderRadius: 10,
+  border: "1px solid #374151",
+  background: "transparent",
+  color: "#e5e7eb",
+  fontSize: "0.85rem",
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
+const composerTextarea: CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "0.55rem 0.65rem",
+  borderRadius: 8,
+  border: "1px solid #374151",
+  background: "#0b0d10",
+  color: "#e5e7eb",
+  fontSize: "0.85rem",
+  lineHeight: 1.45,
+  resize: "vertical",
+};
+
+const postButton: CSSProperties = {
+  minHeight: 40,
+  padding: "0.5rem 0.95rem",
+  borderRadius: 10,
+  border: "1px solid #3b82f6",
+  background: "rgba(59, 130, 246, 0.14)",
+  color: "#93c5fd",
+  fontSize: "0.85rem",
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
+const cancelButton: CSSProperties = {
+  minHeight: 40,
+  padding: "0.5rem 0.85rem",
+  borderRadius: 10,
+  border: "1px solid #374151",
+  background: "transparent",
+  color: "#9ca3af",
+  fontSize: "0.85rem",
+  cursor: "pointer",
+};
+
+const postedLink: CSSProperties = {
+  color: "#60a5fa",
+  textDecoration: "underline",
 };
 
 const srOnly: CSSProperties = {

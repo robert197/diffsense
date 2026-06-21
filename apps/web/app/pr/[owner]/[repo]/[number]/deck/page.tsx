@@ -11,11 +11,16 @@ import { getLatestDeck, resolveCardFileTexts } from "../../../../../../lib/deck"
 import { GitHubAuthError } from "../../../../../../lib/github";
 import { LANGUAGE_COOKIE, resolveLanguageCookie } from "../../../../../../lib/language";
 import { localizeDeckCards } from "../../../../../../lib/localize";
+import {
+  type PostedCardComment,
+  groupPostedComments,
+  listPostedComments,
+} from "../../../../../../lib/prComments";
 import { computeResume, getDecidedFingerprints } from "../../../../../../lib/reviewProgress";
 import { page } from "../../../../../../lib/ui";
 import { LanguagePicker } from "./LanguagePicker";
 import { SwipeDeck } from "./SwipeDeck";
-import { recordSwipe } from "./actions";
+import { postCardComment, recordSwipe } from "./actions";
 
 /**
  * The swipe deck review surface (issue #27) — the heart of the product. A
@@ -52,7 +57,7 @@ export default async function DeckPage({ params }: { params: Promise<Params> }) 
   //  - the live-head staleness check (one GitHub round-trip — AC#5).
   // Keeping the GitHub call off the critical path means it overlaps the translation
   // rather than adding to it.
-  const [cards, decisions, stale] = deck
+  const [cards, decisions, stale, postedComments] = deck
     ? await Promise.all([
         localizeDeckCards(deck.cards, language, { owner, repo }),
         // Resume is advisory: a transient failure on the decisions read must not
@@ -72,8 +77,24 @@ export default async function DeckPage({ params }: { params: Promise<Params> }) 
           return [];
         }),
         resolveStaleDeck(session, owner, repo, prNumber, deck.headSha),
+        // The reviewer's already-posted comments for this deck (issue #30), reflected
+        // back onto each card. Best-effort like the decisions read: a transient
+        // failure degrades to "none posted" rather than 500-ing the deck.
+        listPostedComments({
+          githubUserId: session.userId,
+          owner,
+          repo,
+          prNumber,
+          headSha: deck.headSha,
+        }).catch((err): PostedCardComment[] => {
+          console.error(
+            `[deck] listPostedComments failed for ${owner}/${repo}#${prNumber}; showing none:`,
+            err,
+          );
+          return [];
+        }),
       ])
-    : ([[], [], false] as [Card[], CardDecision[], boolean]);
+    : ([[], [], false, []] as [Card[], CardDecision[], boolean, PostedCardComment[]]);
 
   // A divergent live head SHA means the deck was built against an earlier commit (the
   // re-process path); the resume index + prior tally come from the decisions above.
@@ -109,7 +130,16 @@ export default async function DeckPage({ params }: { params: Promise<Params> }) 
         </p>
       ) : (
         <SwipeDeck
-          cards={await buildCardViews(session.github, owner, repo, deck.headSha, cards)}
+          cards={
+            await buildCardViews(
+              session.github,
+              owner,
+              repo,
+              deck.headSha,
+              cards,
+              groupPostedComments(postedComments),
+            )
+          }
           owner={owner}
           repo={repo}
           prNumber={prNumber}
@@ -117,6 +147,7 @@ export default async function DeckPage({ params }: { params: Promise<Params> }) 
           initialIndex={resume.index}
           initialCounts={resume.counts}
           recordSwipe={recordSwipe}
+          postComment={postCardComment}
         />
       )}
     </main>
@@ -193,6 +224,7 @@ async function buildCardViews(
   repo: string,
   headSha: string,
   cards: Card[],
+  postedByFingerprint: Map<string, PostedCardComment[]>,
 ): Promise<CardView[]> {
   let fileText: Map<string, string | null>;
   try {
@@ -212,5 +244,11 @@ async function buildCardViews(
     throw err;
   }
 
-  return cards.map((card) => toCardView(card, fileText.get(card.file) ?? null));
+  return cards.map((card) =>
+    toCardView(
+      card,
+      fileText.get(card.file) ?? null,
+      postedByFingerprint.get(card.fingerprint) ?? [],
+    ),
+  );
 }

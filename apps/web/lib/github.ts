@@ -7,6 +7,13 @@
  * GitHub-specific client here does not touch the provider-agnostic (LLM) rule.
  */
 
+import type {
+  GitHubGateway,
+  GitHubPrRef,
+  PostedComment,
+  PrCommentAnchor,
+  PrCommentInput,
+} from "@diffsense/core";
 import type { FetchLike } from "./auth/oauth";
 
 const API_BASE = "https://api.github.com";
@@ -40,6 +47,19 @@ export class GitHubRateLimitError extends Error {
   }
 }
 
+/**
+ * Thrown when GitHub rejects a write with a genuine 403 permission denial (a
+ * reviewer without write access trying to comment), as distinct from a rate-limited
+ * 403. Lets the comment action surface a clear "you don't have permission" message
+ * instead of an opaque error (issue #30, AC#5).
+ */
+export class GitHubPermissionError extends Error {
+  constructor(message = "github permission denied") {
+    super(message);
+    this.name = "GitHubPermissionError";
+  }
+}
+
 export interface GitHubUser {
   id: number;
   login: string;
@@ -70,7 +90,13 @@ export interface PullRequest {
   url: string;
 }
 
-export interface GitHubClient {
+/**
+ * The web role's GitHub adapter. It implements the core `GitHubGateway` port
+ * (`postComment`) so a reviewer can leave a PR comment from a card (issue #30) —
+ * posted with *their* OAuth token, attributed to them, not the App. The read
+ * methods below back the reviewer entry path; `GitHubGateway` adds the one write.
+ */
+export interface GitHubClient extends GitHubGateway {
   getAuthenticatedUser(): Promise<GitHubUser>;
   listInstallations(): Promise<Installation[]>;
   listInstallationRepositories(installationId: number): Promise<Repository[]>;
@@ -118,6 +144,51 @@ export function createGitHubClient(
       throw new Error(`github ${path} returned ${res.status}`);
     }
     return res.json();
+  }
+
+  /**
+   * POST helper for writes. Like `get`, it treats 401 and rate-limiting as the
+   * universal fatal cases (thrown here); every other status is returned so the
+   * caller can branch — `postComment` needs the raw 422 to fall back from an
+   * anchored review comment to a conversation comment, and a 403 to map to a
+   * permission error.
+   */
+  async function postJson(
+    path: string,
+    body: unknown,
+  ): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
+    const res = await fetchImpl(`${API_BASE}${path}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/vnd.github+json",
+        "Content-Type": "application/json",
+        "X-GitHub-Api-Version": API_VERSION,
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (res.status === 401) {
+      throw new GitHubAuthError();
+    }
+    if (isRateLimited(res)) {
+      throw new GitHubRateLimitError(`github ${path} rate limited (${res.status})`);
+    }
+    const data = asRecord(await res.json().catch(() => ({})));
+    return { ok: res.ok, status: res.status, data };
+  }
+
+  /** A general PR-conversation comment (the unanchored path + the 422 fallback). */
+  async function postConversation(
+    base: string,
+    prNumber: number,
+    body: string,
+  ): Promise<PostedComment> {
+    const issue = await postJson(`${base}/issues/${prNumber}/comments`, { body });
+    if (!issue.ok) {
+      throwPostError(issue.status, `issues/${prNumber}/comments`);
+    }
+    return mapPostedComment(issue.data, "issue");
   }
 
   return {
@@ -243,7 +314,72 @@ export function createGitHubClient(
       const sha = typeof head.sha === "string" ? head.sha : "";
       return sha.length > 0 ? { headSha: sha } : null;
     },
+
+    async postComment(ref: GitHubPrRef, input: PrCommentInput): Promise<PostedComment> {
+      const base = `/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}`;
+      const { anchor } = input;
+
+      // No anchor → a general PR-conversation comment.
+      if (!anchor) {
+        return postConversation(base, ref.prNumber, input.body);
+      }
+
+      // Anchored → a diff-anchored review comment on the card's file + lines.
+      const reviewBody: Record<string, unknown> = {
+        body: input.body,
+        commit_id: anchor.commitId,
+        path: anchor.file,
+        line: anchor.line,
+        side: anchor.side,
+      };
+      if (anchor.startLine !== undefined) {
+        reviewBody.start_line = anchor.startLine;
+        reviewBody.start_side = anchor.side;
+      }
+      const review = await postJson(`${base}/pulls/${ref.prNumber}/comments`, reviewBody);
+      if (review.ok) {
+        return mapPostedComment(review.data, "review");
+      }
+      // 422 = the line is not part of the diff for this commit. "Anchored where
+      // possible" (AC): fall back to a conversation comment that references the
+      // file/line so the reviewer's words are never lost to a positioning quirk.
+      if (review.status !== 422) {
+        throwPostError(review.status, `pulls/${ref.prNumber}/comments`);
+      }
+      return postConversation(base, ref.prNumber, withAnchorPrefix(input.body, anchor));
+    },
   };
+}
+
+/** Prefix a fallback conversation comment with the file/line it was meant to anchor to. */
+function withAnchorPrefix(body: string, anchor: PrCommentAnchor): string {
+  const lines =
+    anchor.startLine !== undefined
+      ? `lines ${anchor.startLine}–${anchor.line}`
+      : `line ${anchor.line}`;
+  return `Re: \`${anchor.file}\` (added ${lines}):\n\n${body}`;
+}
+
+/** Map GitHub's create-comment response to a `PostedComment`, or fail loudly. */
+function mapPostedComment(data: Record<string, unknown>, kind: "review" | "issue"): PostedComment {
+  const id = Number(data.id);
+  const htmlUrl = typeof data.html_url === "string" ? data.html_url : "";
+  if (!Number.isInteger(id) || htmlUrl.length === 0) {
+    throw new Error("github create-comment returned an unexpected shape (missing id/html_url)");
+  }
+  return { id, htmlUrl, kind };
+}
+
+/**
+ * Map a failed write status to a typed error. A 403 reaching here is a genuine
+ * permission denial — a rate-limited 403 was already caught by `isRateLimited` in
+ * `postJson` — so it becomes `GitHubPermissionError`; anything else is generic.
+ */
+function throwPostError(status: number, path: string): never {
+  if (status === 403) {
+    throw new GitHubPermissionError(`github ${path} forbidden (403)`);
+  }
+  throw new Error(`github ${path} returned ${status}`);
 }
 
 /**
