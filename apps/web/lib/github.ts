@@ -82,6 +82,16 @@ export interface GitHubClient {
    * head SHA so the card's absolute line numbers line up.
    */
   getFileAtRef(owner: string, repo: string, path: string, ref: string): Promise<string | null>;
+  /**
+   * The PR's current head commit SHA, or `null` when the PR no longer exists (404).
+   * Pause & resume (#29) compares this live head against the deck's head SHA so a
+   * reviewer resuming a deck built against an earlier commit is told it is stale.
+   */
+  getPullRequestHead(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<{ headSha: string } | null>;
 }
 
 /** Construct a token-bound GitHub client. `fetchImpl` is injectable for tests. */
@@ -195,6 +205,43 @@ export function createGitHubClient(
       const body = await res.text();
       // A NUL byte means binary content that cannot be shown as source lines.
       return body.includes("\u0000") ? null : body;
+    },
+
+    async getPullRequestHead(
+      owner: string,
+      repo: string,
+      prNumber: number,
+    ): Promise<{ headSha: string } | null> {
+      const res = await fetchImpl(
+        `${API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(
+          repo,
+        )}/pulls/${encodeURIComponent(String(prNumber))}`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: "application/vnd.github+json",
+            "X-GitHub-Api-Version": API_VERSION,
+          },
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        },
+      );
+      if (res.status === 401) {
+        throw new GitHubAuthError();
+      }
+      // The PR was deleted/transferred — treat as "no live head" so the deck still
+      // renders (staleness simply can't be determined) rather than erroring the page.
+      if (res.status === 404) {
+        return null;
+      }
+      if (isRateLimited(res)) {
+        throw new GitHubRateLimitError(`github pulls/${prNumber} rate limited (${res.status})`);
+      }
+      if (!res.ok) {
+        throw new Error(`github pulls/${prNumber} returned ${res.status}`);
+      }
+      const head = asRecord(asRecord(await res.json()).head);
+      const sha = typeof head.sha === "string" ? head.sha : "";
+      return sha.length > 0 ? { headSha: sha } : null;
     },
   };
 }

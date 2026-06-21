@@ -33,6 +33,8 @@ export const STATE_COOKIE = "ds_oauth_state";
 export const STATE_TTL_SECONDS = 600; // 10 minutes
 
 export interface ActiveSession {
+  /** Stable GitHub numeric user id — the per-reviewer key for resumable state (#29). */
+  userId: number;
   login: string;
   avatarUrl: string | null;
   /** A GitHub client already bound to this session's (fresh) access token. */
@@ -125,6 +127,7 @@ export async function getSession(): Promise<ActiveSession | null> {
   }
 
   return {
+    userId: row.githubUserId,
     login: row.githubLogin,
     avatarUrl: row.githubAvatarUrl,
     github: createGitHubClient(accessToken),

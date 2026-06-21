@@ -64,6 +64,13 @@
       "when": 1782518400000,
       "tag": "0008_card_localizations",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1782604800000,
+      "tag": "0009_review_progress",
+      "breakpoints": true
     }
   ]
 }

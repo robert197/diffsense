@@ -50,6 +50,7 @@ export {
 export { MAX_LISTED, renderRankedComment } from "./render/renderRankedComment.js";
 export { type ScopeCreepPorts, detectScopeCreep } from "./scope/detectScopeCreep.js";
 export { buildDeck } from "./deck/buildDeck.js";
+export { type CardDecision, CardDecisionSchema, resumeState } from "./deck/reviewProgress.js";
 export {
   type LocalizePorts,
   type LocalizeRef,

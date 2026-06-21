@@ -62,9 +62,21 @@ function firePointer(node: Element, type: string, clientX: number) {
   });
 }
 
-function renderDeck(cards: CardView[], recordSwipe = vi.fn(async () => {})) {
+function renderDeck(
+  cards: CardView[],
+  recordSwipe = vi.fn(async () => {}),
+  extra: { initialIndex?: number; initialCounts?: { up: number; down: number } } = {},
+) {
   render(
-    <SwipeDeck cards={cards} owner="acme" repo="web" prNumber={7} recordSwipe={recordSwipe} />,
+    <SwipeDeck
+      cards={cards}
+      owner="acme"
+      repo="web"
+      prNumber={7}
+      headSha="h1"
+      recordSwipe={recordSwipe}
+      {...extra}
+    />,
   );
   return recordSwipe;
 }
@@ -137,6 +149,8 @@ describe("SwipeDeck — keyboard affordance (AC#3, AC#5 desktop)", () => {
     expect(fd.get("fingerprint")).toBe("a");
     expect(fd.get("owner")).toBe("acme");
     expect(fd.get("prNumber")).toBe("7");
+    // The head SHA travels with the swipe so the resume row is keyed to the deck (#29).
+    expect(fd.get("headSha")).toBe("h1");
     // Advanced to the second card; progress reflects one reviewed.
     expect(screen.getByText("src/b.ts")).toBeTruthy();
     expect(screen.getByText("1 / 2 reviewed")).toBeTruthy();
@@ -231,6 +245,57 @@ describe("SwipeDeck — completion (AC#4)", () => {
     expect(screen.getByText(/reviewed the whole deck/i)).toBeTruthy();
     expect(screen.getByText(/1 looked good/)).toBeTruthy();
     expect(screen.getByText(/0 flagged/)).toBeTruthy();
+  });
+});
+
+describe("SwipeDeck — resume (issue #29)", () => {
+  it("starts on the next unreviewed card when given a resume index", () => {
+    renderDeck(
+      [
+        cardView({ fingerprint: "a", file: "src/a.ts" }),
+        cardView({ fingerprint: "b", file: "src/b.ts" }),
+        cardView({ fingerprint: "c", file: "src/c.ts" }),
+      ],
+      vi.fn(async () => {}),
+      { initialIndex: 2 },
+    );
+    // Resumed past the first two cards straight to the third.
+    expect(screen.getByText("src/c.ts")).toBeTruthy();
+    expect(screen.queryByText("src/a.ts")).toBeNull();
+    expect(screen.getByText("2 / 3 reviewed")).toBeTruthy();
+  });
+
+  it("renders the completion state when resuming a fully-reviewed deck", () => {
+    renderDeck(
+      [cardView({ fingerprint: "a" }), cardView({ fingerprint: "b" })],
+      vi.fn(async () => {}),
+      { initialIndex: 2, initialCounts: { up: 1, down: 1 } },
+    );
+    expect(screen.getByText(/reviewed the whole deck/i)).toBeTruthy();
+    // The resumed tally is preserved on the completion screen.
+    expect(screen.getByText(/1 looked good/)).toBeTruthy();
+    expect(screen.getByText(/1 flagged/)).toBeTruthy();
+  });
+
+  it("seeds the running tally from prior decisions so resumed progress is honest", () => {
+    renderDeck(
+      [
+        cardView({ fingerprint: "a" }),
+        cardView({ fingerprint: "b" }),
+        cardView({ fingerprint: "c" }),
+      ],
+      vi.fn(async () => {}),
+      { initialIndex: 1, initialCounts: { up: 1, down: 0 } },
+    );
+    act(() => {
+      fireEvent.keyDown(window, { key: "ArrowLeft" }); // flag card b
+    });
+    // Advance to the final card; the done screen will tally 1 good + 1 flagged so far.
+    act(() => {
+      fireEvent.keyDown(window, { key: "ArrowRight" }); // approve card c → done
+    });
+    expect(screen.getByText(/2 looked good/)).toBeTruthy();
+    expect(screen.getByText(/1 flagged/)).toBeTruthy();
   });
 });
 

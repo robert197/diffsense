@@ -43,6 +43,12 @@ export default async function Home({
             <a href="/repos" style={primaryButton}>
               Your repositories →
             </a>
+            <a
+              href="/reviews"
+              style={{ color: "#60a5fa", textDecoration: "none", fontWeight: 600 }}
+            >
+              Continue reviewing →
+            </a>
             <SignOutButton variant="link" />
           </div>
         ) : (

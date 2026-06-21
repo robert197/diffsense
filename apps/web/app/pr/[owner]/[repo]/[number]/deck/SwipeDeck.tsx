@@ -49,12 +49,27 @@ export interface SwipeDeckProps {
   owner: string;
   repo: string;
   prNumber: number;
+  /** PR head SHA this deck was built against — part of the resume key (#29). */
+  headSha: string;
+  /** Resume point: the index of the first unreviewed card (#29). Defaults to 0. */
+  initialIndex?: number;
+  /** Prior 👍/👎 tally from persisted decisions, so the progress reflects resumed work. */
+  initialCounts?: { up: number; down: number };
   recordSwipe: (formData: FormData) => Promise<void>;
 }
 
-export function SwipeDeck({ cards, owner, repo, prNumber, recordSwipe }: SwipeDeckProps) {
-  const [index, setIndex] = useState(0);
-  const [counts, setCounts] = useState({ up: 0, down: 0 });
+export function SwipeDeck({
+  cards,
+  owner,
+  repo,
+  prNumber,
+  headSha,
+  initialIndex = 0,
+  initialCounts,
+  recordSwipe,
+}: SwipeDeckProps) {
+  const [index, setIndex] = useState(initialIndex);
+  const [counts, setCounts] = useState(initialCounts ?? { up: 0, down: 0 });
   const [dragX, setDragX] = useState(0);
   const [leaving, setLeaving] = useState<Direction | null>(null);
   const [, startWrite] = useTransition();
@@ -91,6 +106,7 @@ export function SwipeDeck({ cards, owner, repo, prNumber, recordSwipe }: SwipeDe
       fd.set("owner", owner);
       fd.set("repo", repo);
       fd.set("prNumber", String(prNumber));
+      fd.set("headSha", headSha);
       fd.set("fingerprint", card.fingerprint);
       fd.set("tier", card.tier);
       fd.set("sentiment", sentiment);
@@ -127,7 +143,7 @@ export function SwipeDeck({ cards, owner, repo, prNumber, recordSwipe }: SwipeDe
       setLeaving(direction);
       advanceTimer.current = setTimeout(advance, SWIPE_OUT_MS);
     },
-    [cards, index, owner, repo, prNumber, recordSwipe, clearAdvanceTimer],
+    [cards, index, owner, repo, prNumber, headSha, recordSwipe, clearAdvanceTimer],
   );
 
   // Desktop keyboard affordance: ← flags, → looks good. Auto-repeat (held key) and

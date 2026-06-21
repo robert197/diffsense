@@ -155,6 +155,8 @@ describe("createSession + getSession round trip", () => {
 
     const session = await getSession();
     expect(session).not.toBeNull();
+    // The stable numeric id keys per-reviewer resumable state (#29).
+    expect(session?.userId).toBe(42);
     expect(session?.login).toBe("octocat");
     expect(session?.avatarUrl).toBe("https://a/octocat.png");
     expect(session?.github).toBeDefined();

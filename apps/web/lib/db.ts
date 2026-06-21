@@ -142,7 +142,42 @@ export const cardLocalizations = pgTable(
   }),
 );
 
-const schema = { findings, decks, reactions, webSessions, cardLocalizations };
+/**
+ * Per-reviewer review progress (issue #29). Mirrors the `review_progress` table
+ * declared in `apps/app/src/db/schema.ts` (migration `0009_review_progress`) —
+ * lockstep, no shared schema package yet. `apps/web` is the only reader/writer: the
+ * swipe action upserts a decision on every swipe, the deck page reads the reviewer's
+ * decided cards back to resume at the next unreviewed one, and the dashboard lists
+ * in-progress reviews. Keyed by `github_user_id` (stable identity) + `head_sha` so
+ * state is per-reviewer, portable across devices, and tied to the reviewed commit.
+ */
+export const reviewProgress = pgTable(
+  "review_progress",
+  {
+    id: serial("id").primaryKey(),
+    githubUserId: integer("github_user_id").notNull(),
+    owner: text("owner").notNull(),
+    repo: text("repo").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    headSha: text("head_sha").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    decision: text("decision").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    decisionUnique: unique("review_progress_user_pr_head_fp_unique").on(
+      table.githubUserId,
+      table.owner,
+      table.repo,
+      table.prNumber,
+      table.headSha,
+      table.fingerprint,
+    ),
+    userIdx: index("review_progress_user_idx").on(table.githubUserId),
+  }),
+);
+
+const schema = { findings, decks, reactions, webSessions, cardLocalizations, reviewProgress };
 
 let cached: ReturnType<typeof drizzle<typeof schema>> | null = null;
 
