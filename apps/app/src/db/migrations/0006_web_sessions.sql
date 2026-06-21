@@ -10,3 +10,5 @@ CREATE TABLE IF NOT EXISTS "web_sessions" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"expires_at" timestamp with time zone NOT NULL
 );
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "web_sessions_expires_at_idx" ON "web_sessions" ("expires_at");

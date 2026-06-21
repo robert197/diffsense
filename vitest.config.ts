@@ -14,6 +14,8 @@ export default defineConfig({
       "apps/*/src/**/*.test.ts",
       // apps/web uses `lib/` (not `src/`); its pure auth/github helpers test here.
       "apps/web/lib/**/*.test.ts",
+      // Route-handler tests (e.g. the OAuth callback CSRF guard) live under app/.
+      "apps/web/app/**/*.test.ts",
     ],
     environment: "node",
   },

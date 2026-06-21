@@ -1,5 +1,6 @@
 import {
   boolean,
+  index,
   integer,
   jsonb,
   numeric,
@@ -126,18 +127,26 @@ export const findings = pgTable("findings", {
  * `apps/web` owns the only reader/writer; the table lives here because `apps/app`
  * is the canonical schema + migration home (a shared schema package is deferred).
  */
-export const webSessions = pgTable("web_sessions", {
-  tokenHash: text("token_hash").primaryKey(),
-  githubUserId: integer("github_user_id").notNull(),
-  githubLogin: text("github_login").notNull(),
-  githubAvatarUrl: text("github_avatar_url"),
-  accessTokenEncrypted: text("access_token_encrypted").notNull(),
-  accessTokenExpiresAt: timestamp("access_token_expires_at", { withTimezone: true }),
-  refreshTokenEncrypted: text("refresh_token_encrypted"),
-  refreshTokenExpiresAt: timestamp("refresh_token_expires_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-});
+export const webSessions = pgTable(
+  "web_sessions",
+  {
+    tokenHash: text("token_hash").primaryKey(),
+    githubUserId: integer("github_user_id").notNull(),
+    githubLogin: text("github_login").notNull(),
+    githubAvatarUrl: text("github_avatar_url"),
+    accessTokenEncrypted: text("access_token_encrypted").notNull(),
+    accessTokenExpiresAt: timestamp("access_token_expires_at", { withTimezone: true }),
+    refreshTokenEncrypted: text("refresh_token_encrypted"),
+    refreshTokenExpiresAt: timestamp("refresh_token_expires_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  // Index the TTL column so a periodic expired-session sweep
+  // (DELETE ... WHERE expires_at <= now()) stays an index scan, not a full scan.
+  (table) => ({
+    expiresAtIdx: index("web_sessions_expires_at_idx").on(table.expiresAt),
+  }),
+);
 
 /**
  * Per-PR inference cost (issue #12, docs/ARCHITECTURE.md §2) — product

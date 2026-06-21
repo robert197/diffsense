@@ -25,6 +25,13 @@ export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 14; // 14 days
 // Refresh an expiring access token slightly early to avoid edge races.
 const REFRESH_SKEW_SECONDS = 60;
 
+// The CSRF `state` nonce cookie shared by /login (writes) and the callback
+// (reads/clears). Defined here, next to SESSION_COOKIE, so both routes import a
+// single source of truth — a drift between two local copies would silently break
+// the CSRF guard.
+export const STATE_COOKIE = "ds_oauth_state";
+export const STATE_TTL_SECONDS = 600; // 10 minutes
+
 export interface ActiveSession {
   login: string;
   avatarUrl: string | null;
@@ -105,9 +112,16 @@ export async function getSession(): Promise<ActiveSession | null> {
     return null;
   }
 
-  const refreshed = await maybeRefresh(row, config, key);
-  if (refreshed) {
-    accessToken = refreshed;
+  // Refresh an expired access token when possible. Per the contract above, a
+  // session whose token is expired and cannot be refreshed (no/invalid refresh
+  // token, or GitHub rejects the refresh) is treated as signed out — never an
+  // error. `maybeRefresh` therefore reports an outcome instead of throwing.
+  const outcome = await maybeRefresh(row, config, key);
+  if (outcome.status === "failed") {
+    return null;
+  }
+  if (outcome.status === "refreshed") {
+    accessToken = outcome.accessToken;
   }
 
   return {
@@ -143,32 +157,68 @@ export async function clearSessionRow(): Promise<void> {
 
 type SessionRow = typeof webSessions.$inferSelect;
 
-/** Refresh + persist an expired access token; returns the new token or null. */
+/** What `getSession` should do with a session's access token. */
+export type RefreshOutcome =
+  | { status: "not-needed" }
+  | { status: "refreshed"; accessToken: string }
+  | { status: "failed" };
+
+/**
+ * Pure decision: is the access token expired (within the early-refresh skew) and
+ * thus in need of a refresh? Extracted so the skew/TTL boundary is unit-testable
+ * without Next or the DB. A `null` expiry means a non-expiring token (never
+ * refreshed). `now`/`skewSeconds` are injectable for tests.
+ */
+export function accessTokenNeedsRefresh(
+  accessTokenExpiresAt: Date | null,
+  now: number = Date.now(),
+  skewSeconds: number = REFRESH_SKEW_SECONDS,
+): boolean {
+  if (!accessTokenExpiresAt) {
+    return false; // non-expiring token
+  }
+  return accessTokenExpiresAt.getTime() - skewSeconds * 1000 <= now;
+}
+
+/**
+ * Refresh + persist an expired access token. Never throws: a refresh that can't
+ * happen (no/undecryptable refresh token) or that GitHub rejects (expired,
+ * rotated, revoked, or a transient transport error) returns `{status:"failed"}`,
+ * which `getSession` maps to signed-out. A token that didn't need refreshing
+ * returns `{status:"not-needed"}`. Only a successful rotation hits the DB.
+ */
 async function maybeRefresh(
   row: SessionRow,
   config: AuthConfig,
   key: Buffer,
-): Promise<string | null> {
-  const expiresAt = row.accessTokenExpiresAt?.getTime();
-  if (!expiresAt || expiresAt - REFRESH_SKEW_SECONDS * 1000 > Date.now()) {
-    return null; // non-expiring token, or still valid
+): Promise<RefreshOutcome> {
+  if (!accessTokenNeedsRefresh(row.accessTokenExpiresAt)) {
+    return { status: "not-needed" }; // non-expiring token, or still valid
   }
   if (!row.refreshTokenEncrypted) {
-    return null;
+    return { status: "failed" }; // expired and nothing to refresh with
   }
 
   let refreshToken: string;
   try {
     refreshToken = decrypt(row.refreshTokenEncrypted, key);
   } catch {
-    return null;
+    return { status: "failed" };
   }
 
-  const tokens = await refreshAccessToken({
-    clientId: config.clientId,
-    clientSecret: config.clientSecret,
-    refreshToken,
-  });
+  let tokens: OAuthTokens;
+  try {
+    tokens = await refreshAccessToken({
+      clientId: config.clientId,
+      clientSecret: config.clientSecret,
+      refreshToken,
+    });
+  } catch {
+    // GitHub rejected the refresh (expired/rotated/revoked) or the call failed.
+    // Treat as signed out rather than crashing the render.
+    return { status: "failed" };
+  }
+
   const now = Date.now();
   await getDb()
     .update(webSessions)
@@ -183,7 +233,7 @@ async function maybeRefresh(
         : row.refreshTokenExpiresAt,
     })
     .where(eq(webSessions.tokenHash, row.tokenHash));
-  return tokens.accessToken;
+  return { status: "refreshed", accessToken: tokens.accessToken };
 }
 
 function expiryFrom(nowMs: number, seconds: number | undefined): Date | null {

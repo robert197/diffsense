@@ -1,3 +1,4 @@
+import { SignOutButton } from "../components/SignOutButton";
 import { getSession } from "../lib/auth/session";
 import { primaryButton } from "../lib/ui";
 
@@ -42,21 +43,7 @@ export default async function Home({
             <a href="/repos" style={primaryButton}>
               Your repositories →
             </a>
-            <form action="/logout" method="post">
-              <button
-                type="submit"
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  color: "#9ca3af",
-                  textDecoration: "underline",
-                  cursor: "pointer",
-                  fontSize: "0.85rem",
-                }}
-              >
-                Sign out
-              </button>
-            </form>
+            <SignOutButton variant="link" />
           </div>
         ) : (
           <a href="/login" style={primaryButton}>

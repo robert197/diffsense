@@ -1,11 +1,35 @@
 import { describe, expect, it, vi } from "vitest";
-import { GitHubAuthError, createGitHubClient } from "./github";
+import { GitHubAuthError, GitHubRateLimitError, createGitHubClient } from "./github";
 
-function jsonResponse(body: unknown, status = 200): Response {
+function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
   });
+}
+
+function repoPage(count: number, offset = 0) {
+  return {
+    total_count: 9999,
+    repositories: Array.from({ length: count }, (_, i) => ({
+      name: `r${offset + i}`,
+      full_name: `acme/r${offset + i}`,
+      private: false,
+      pushed_at: null,
+      owner: { login: "acme" },
+    })),
+  };
+}
+
+function prPage(count: number, offset = 0) {
+  return Array.from({ length: count }, (_, i) => ({
+    number: offset + i,
+    title: `pr ${offset + i}`,
+    user: { login: "dev" },
+    updated_at: "2026-06-20T10:00:00Z",
+    draft: false,
+    html_url: `https://github.com/acme/web/pull/${offset + i}`,
+  }));
 }
 
 describe("createGitHubClient", () => {
@@ -116,15 +140,69 @@ describe("createGitHubClient", () => {
     expect(await client.listOpenPullRequests("acme", "web")).toEqual([]);
   });
 
+  it("stops paginating repositories at the MAX_PAGES cap (no unbounded loop)", async () => {
+    // Every page is full (100) so the early `< PER_PAGE` break never fires; the
+    // loop must stop at the 5-page ceiling rather than calling forever.
+    const fetchImpl = vi.fn(async () => jsonResponse(repoPage(100)));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    const repos = await client.listInstallationRepositories(7);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
+    expect(repos).toHaveLength(500);
+  });
+
+  it("paginates open PRs across pages and stops on a short page", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(prPage(100)))
+      .mockResolvedValueOnce(jsonResponse(prPage(2, 100)));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    const prs = await client.listOpenPullRequests("acme", "web");
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(prs).toHaveLength(102);
+    expect(fetchImpl.mock.calls[0][0]).toContain("page=1");
+    expect(fetchImpl.mock.calls[1][0]).toContain("page=2");
+  });
+
   it("throws GitHubAuthError on 401", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ message: "Bad credentials" }, 401));
     const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
     await expect(client.getAuthenticatedUser()).rejects.toBeInstanceOf(GitHubAuthError);
   });
 
+  it("throws GitHubRateLimitError on 429", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ message: "slow down" }, 429));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    await expect(client.listInstallations()).rejects.toBeInstanceOf(GitHubRateLimitError);
+  });
+
+  it("treats a 403 with an exhausted rate-limit budget as rate limited", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ message: "API rate limit exceeded" }, 403, { "x-ratelimit-remaining": "0" }),
+    );
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    await expect(client.listInstallations()).rejects.toBeInstanceOf(GitHubRateLimitError);
+  });
+
+  it("treats a plain 403 (permission denial) as a generic error, not rate limit", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ message: "Forbidden" }, 403));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    const err = await client.listInstallations().catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(GitHubRateLimitError);
+    expect(err).not.toBeInstanceOf(GitHubAuthError);
+  });
+
   it("throws a generic error on 500", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({}, 500));
     const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
     await expect(client.listInstallations()).rejects.toThrow(/500/);
+  });
+
+  it("rejects a malformed identity response (missing numeric id)", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ login: "octocat" }));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    await expect(client.getAuthenticatedUser()).rejects.toThrow(/identity/);
   });
 });

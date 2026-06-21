@@ -1,4 +1,11 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+  scryptSync,
+  timingSafeEqual,
+} from "node:crypto";
 
 /**
  * Cryptographic primitives for the reviewer session (issue #25). Node's
@@ -60,6 +67,20 @@ export function randomToken(): string {
 /** SHA-256 hex of a token — the DB primary key, so the raw token is never stored. */
 export function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
+}
+
+/**
+ * Constant-time string equality. Returns false for unequal lengths (the length
+ * check itself is not secret here) and otherwise compares without short-circuiting
+ * on the first differing byte. Used for the OAuth `state` nonce check.
+ */
+export function timingSafeEqualString(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, "utf8");
+  const bufB = Buffer.from(b, "utf8");
+  if (bufA.length !== bufB.length) {
+    return false;
+  }
+  return timingSafeEqual(bufA, bufB);
 }
 
 function b64url(buf: Buffer): string {

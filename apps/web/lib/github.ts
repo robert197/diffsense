@@ -12,16 +12,31 @@ import type { FetchLike } from "./auth/oauth";
 const API_BASE = "https://api.github.com";
 const API_VERSION = "2022-11-28";
 const PER_PAGE = 100;
-// Bound pagination so a huge installation can't loop unbounded. Repos/PRs beyond
-// this are not shown this slice (see Scope Boundaries); pagination UI is deferred.
+// Bound pagination so a huge installation can't loop unbounded. Repos beyond
+// MAX_PAGES * PER_PAGE are not shown this slice; a fuller pagination UI is deferred.
 const MAX_PAGES = 5;
-const OPEN_PR_PER_PAGE = 50;
+const OPEN_PR_PER_PAGE = 100;
+// Per-request deadline. `fetch` has no default timeout, so a stalled GitHub
+// connection would otherwise hang a server render (and its worker) indefinitely.
+const REQUEST_TIMEOUT_MS = 10_000;
 
 /** Thrown when GitHub rejects the token (401) — the caller clears the session. */
 export class GitHubAuthError extends Error {
   constructor(message = "github authentication failed") {
     super(message);
     this.name = "GitHubAuthError";
+  }
+}
+
+/**
+ * Thrown when GitHub rate-limits the token (403/429 with the rate-limit signal).
+ * Distinct from a generic failure so the UI can show a "try again shortly"
+ * message instead of an opaque error.
+ */
+export class GitHubRateLimitError extends Error {
+  constructor(message = "github rate limit exceeded") {
+    super(message);
+    this.name = "GitHubRateLimitError";
   }
 }
 
@@ -74,9 +89,13 @@ export function createGitHubClient(
         Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": API_VERSION,
       },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (res.status === 401) {
       throw new GitHubAuthError();
+    }
+    if (isRateLimited(res)) {
+      throw new GitHubRateLimitError(`github ${path} rate limited (${res.status})`);
     }
     if (!res.ok) {
       throw new Error(`github ${path} returned ${res.status}`);
@@ -120,19 +139,52 @@ export function createGitHubClient(
     },
 
     async listOpenPullRequests(owner: string, repo: string): Promise<PullRequest[]> {
-      const path = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(
+      const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(
         repo,
       )}/pulls?state=open&sort=updated&direction=desc&per_page=${OPEN_PR_PER_PAGE}`;
-      return asArray(await get(path)).map(mapPullRequest);
+      const out: PullRequest[] = [];
+      for (let page = 1; page <= MAX_PAGES; page++) {
+        const items = asArray(await get(`${base}&page=${page}`));
+        out.push(...items.map(mapPullRequest));
+        if (items.length < OPEN_PR_PER_PAGE) {
+          break;
+        }
+      }
+      return out;
     },
   };
 }
 
+/**
+ * GitHub signals rate limiting with 429, or 403 plus an exhausted rate-limit
+ * budget / a Retry-After. A plain 403 (genuine permission denial) is not treated
+ * as rate limiting.
+ */
+function isRateLimited(res: Response): boolean {
+  if (res.status === 429) {
+    return true;
+  }
+  if (res.status !== 403) {
+    return false;
+  }
+  return (
+    res.headers.get("retry-after") !== null || res.headers.get("x-ratelimit-remaining") === "0"
+  );
+}
+
 function mapUser(raw: unknown): GitHubUser {
   const data = asRecord(raw);
+  const id = Number(data.id);
+  const login = typeof data.login === "string" ? data.login : "";
+  // The identity drives the session row (github_user_id is NOT NULL, login is
+  // shown to the reviewer). A malformed /user response must fail loudly here
+  // rather than insert a NaN id or an empty login downstream.
+  if (!Number.isInteger(id) || login.length === 0) {
+    throw new Error("github /user returned an unexpected identity shape");
+  }
   return {
-    id: Number(data.id),
-    login: String(data.login ?? ""),
+    id,
+    login,
     avatarUrl: typeof data.avatar_url === "string" ? data.avatar_url : null,
   };
 }

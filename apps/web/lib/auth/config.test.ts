@@ -4,7 +4,7 @@ import { loadAuthConfig, redirectUri } from "./config";
 const valid: NodeJS.ProcessEnv = {
   GITHUB_OAUTH_CLIENT_ID: "Iv1.client",
   GITHUB_OAUTH_CLIENT_SECRET: "secret",
-  SESSION_SECRET: "session-secret",
+  SESSION_SECRET: "session-secret-with-entropy",
   WEB_BASE_URL: "https://cards.diffsense.example.com",
 };
 
@@ -13,8 +13,12 @@ describe("loadAuthConfig", () => {
     const config = loadAuthConfig(valid);
     expect(config.clientId).toBe("Iv1.client");
     expect(config.clientSecret).toBe("secret");
-    expect(config.sessionSecret).toBe("session-secret");
+    expect(config.sessionSecret).toBe("session-secret-with-entropy");
     expect(config.webBaseUrl).toBe("https://cards.diffsense.example.com");
+  });
+
+  it("rejects a SESSION_SECRET shorter than the minimum length", () => {
+    expect(() => loadAuthConfig({ ...valid, SESSION_SECRET: "short" })).toThrow(/SESSION_SECRET/);
   });
 
   it("strips a trailing slash from WEB_BASE_URL", () => {

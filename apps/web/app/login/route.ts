@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { loadAuthConfig, redirectUri } from "../../lib/auth/config";
 import { randomToken } from "../../lib/auth/crypto";
 import { buildAuthorizeUrl } from "../../lib/auth/oauth";
+import { STATE_COOKIE, STATE_TTL_SECONDS } from "../../lib/auth/session";
 
 /**
  * Start the GitHub OAuth flow (issue #25). Generate a CSRF `state` nonce, stash
@@ -10,9 +11,6 @@ import { buildAuthorizeUrl } from "../../lib/auth/oauth";
  */
 
 export const dynamic = "force-dynamic";
-
-const STATE_COOKIE = "ds_oauth_state";
-const STATE_TTL_SECONDS = 600; // 10 minutes
 
 export async function GET(): Promise<NextResponse> {
   const config = loadAuthConfig();

@@ -22,6 +22,9 @@ export interface AuthConfig {
   secureCookies: boolean;
 }
 
+/** Floor on SESSION_SECRET length so the derived AES key isn't trivially weak. */
+const MIN_SESSION_SECRET_LENGTH = 16;
+
 const REQUIRED: Array<[keyof Omit<AuthConfig, "secureCookies">, string]> = [
   ["clientId", "GITHUB_OAUTH_CLIENT_ID"],
   ["clientSecret", "GITHUB_OAUTH_CLIENT_SECRET"],
@@ -41,6 +44,15 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig
   const missing = REQUIRED.filter(([key]) => !values[key]?.trim()).map(([, envName]) => envName);
   if (missing.length > 0) {
     throw new Error(`Missing required auth env: ${missing.join(", ")}`);
+  }
+
+  // SESSION_SECRET is the sole entropy for the AES key that encrypts GitHub
+  // tokens at rest (crypto.deriveKey uses a fixed salt), so reject trivially weak
+  // secrets at boot rather than silently deriving a guessable key.
+  if ((values.sessionSecret as string).length < MIN_SESSION_SECRET_LENGTH) {
+    throw new Error(
+      `SESSION_SECRET must be at least ${MIN_SESSION_SECRET_LENGTH} characters (use a high-entropy random value)`,
+    );
   }
 
   return {

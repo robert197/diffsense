@@ -1,8 +1,14 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { loadAuthConfig, redirectUri } from "../../../../lib/auth/config";
+import { timingSafeEqualString } from "../../../../lib/auth/crypto";
 import { exchangeCodeForToken } from "../../../../lib/auth/oauth";
-import { SESSION_COOKIE, createSession, sessionCookieOptions } from "../../../../lib/auth/session";
+import {
+  SESSION_COOKIE,
+  STATE_COOKIE,
+  createSession,
+  sessionCookieOptions,
+} from "../../../../lib/auth/session";
 import { createGitHubClient } from "../../../../lib/github";
 
 /**
@@ -13,8 +19,6 @@ import { createGitHubClient } from "../../../../lib/github";
  */
 
 export const dynamic = "force-dynamic";
-
-const STATE_COOKIE = "ds_oauth_state";
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const config = loadAuthConfig();
@@ -27,7 +31,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const expectedState = req.cookies.get(STATE_COOKIE)?.value;
 
   // CSRF guard: the returned state must match the single-use cookie nonce.
-  if (!code || !state || !expectedState || state !== expectedState) {
+  // Constant-time compare for defense in depth (consistent with the codebase's
+  // hashed-token handling), after the presence checks short-circuit.
+  if (!code || !state || !expectedState || !timingSafeEqualString(state, expectedState)) {
     return clearState(NextResponse.redirect(errorUrl));
   }
 
@@ -41,7 +47,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     });
     const user = await createGitHubClient(tokens.accessToken).getAuthenticatedUser();
     sessionToken = await createSession(user, tokens);
-  } catch {
+  } catch (err) {
+    // Log server-side so production sign-in failures are diagnosable; the
+    // reviewer still gets the generic ?error=auth screen (no detail leak).
+    console.error("oauth callback failed", err);
     return clearState(NextResponse.redirect(errorUrl));
   }
 
