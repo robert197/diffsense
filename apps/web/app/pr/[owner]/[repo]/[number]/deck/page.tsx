@@ -1,4 +1,4 @@
-import { type Card, type CardDecision, resumeState } from "@diffsense/core";
+import type { Card, CardDecision } from "@diffsense/core";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import {
@@ -11,7 +11,7 @@ import { getLatestDeck, resolveCardFileTexts } from "../../../../../../lib/deck"
 import { GitHubAuthError } from "../../../../../../lib/github";
 import { LANGUAGE_COOKIE, resolveLanguageCookie } from "../../../../../../lib/language";
 import { localizeDeckCards } from "../../../../../../lib/localize";
-import { getDecidedFingerprints } from "../../../../../../lib/reviewProgress";
+import { computeResume, getDecidedFingerprints } from "../../../../../../lib/reviewProgress";
 import { page } from "../../../../../../lib/ui";
 import { LanguagePicker } from "./LanguagePicker";
 import { SwipeDeck } from "./SwipeDeck";
@@ -55,12 +55,21 @@ export default async function DeckPage({ params }: { params: Promise<Params> }) 
   const [cards, decisions, stale] = deck
     ? await Promise.all([
         localizeDeckCards(deck.cards, language, { owner, repo }),
+        // Resume is advisory: a transient failure on the decisions read must not
+        // 500 the whole deck. Degrade to "no decisions" (start at card 0) and log,
+        // matching the graceful fallback `localizeDeckCards` uses for its prose.
         getDecidedFingerprints({
           githubUserId: session.userId,
           owner,
           repo,
           prNumber,
           headSha: deck.headSha,
+        }).catch((err): CardDecision[] => {
+          console.error(
+            `[deck] getDecidedFingerprints failed for ${owner}/${repo}#${prNumber}; resuming from the start:`,
+            err,
+          );
+          return [];
         }),
         resolveStaleDeck(session, owner, repo, prNumber, deck.headSha),
       ])
@@ -115,33 +124,6 @@ export default async function DeckPage({ params }: { params: Promise<Params> }) 
 }
 
 /**
- * Resume point + prior tally from the reviewer's persisted decisions (issue #29).
- * The next card is the first undecided one (`resumeState`); the up/down tally counts
- * only decisions whose card is still in this deck, so the progress reflects the
- * resumed work without inflating from decisions on a different head.
- */
-function computeResume(
-  cards: Card[],
-  decisions: CardDecision[],
-): { index: number; counts: { up: number; down: number } } {
-  const decisionByFingerprint = new Map(decisions.map((d) => [d.fingerprint, d.decision]));
-  const counts = { up: 0, down: 0 };
-  const decided = new Set<string>();
-  // Walk the cards (not the decisions) so the tally counts per card and stays
-  // consistent with `resumeState`'s reviewed count; decisions on a card not in this
-  // deck (e.g. from a different head SHA) are ignored.
-  for (const card of cards) {
-    const decision = decisionByFingerprint.get(card.fingerprint);
-    if (decision) {
-      counts[decision] += 1;
-      decided.add(card.fingerprint);
-    }
-  }
-  const { nextIndex } = resumeState(cards, decided);
-  return { index: nextIndex, counts };
-}
-
-/**
  * Is the deck stale (issue #29, AC#5)? Compare the deck's head SHA against the PR's
  * live head from GitHub. A `401` clears the session and redirects (consistent with
  * the rest of the entry path); a rate-limit/transient failure can't decide staleness,
@@ -162,6 +144,13 @@ async function resolveStaleDeck(
       await clearSessionRow();
       redirect("/login");
     }
+    // A rate-limit/transient failure can't decide staleness, so the deck renders
+    // normally rather than blocking on a banner that may be wrong. Log it so the
+    // swallowed failure stays observable (e.g. a rate-limit surge on this check).
+    console.warn(
+      `[deck] stale-deck check failed for ${owner}/${repo}#${prNumber}; rendering without the stale banner:`,
+      err,
+    );
     return false;
   }
 }

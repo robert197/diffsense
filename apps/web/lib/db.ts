@@ -1,4 +1,6 @@
+import { sql } from "drizzle-orm";
 import {
+  check,
   index,
   integer,
   jsonb,
@@ -174,6 +176,11 @@ export const reviewProgress = pgTable(
       table.fingerprint,
     ),
     userIdx: index("review_progress_user_idx").on(table.githubUserId),
+    // Enforce the swipe-sentiment domain at the DB (mirrors apps/app schema).
+    decisionCheck: check(
+      "review_progress_decision_check",
+      sql`${table.decision} in ('up', 'down')`,
+    ),
   }),
 );
 

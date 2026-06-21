@@ -1,5 +1,7 @@
+import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -258,6 +260,13 @@ export const reviewProgress = pgTable(
     ),
     // Listing one reviewer's in-progress reviews for the dashboard stays an index scan.
     userIdx: index("review_progress_user_idx").on(table.githubUserId),
+    // The decision domain is the swipe sentiment; enforce it at the DB so a direct
+    // insert or a future caller bypassing the action's validation can't store a value
+    // the read path would silently coerce to "up".
+    decisionCheck: check(
+      "review_progress_decision_check",
+      sql`${table.decision} in ('up', 'down')`,
+    ),
   }),
 );
 

@@ -1,4 +1,4 @@
-import { type CardDecision, DeckSchema, resumeState } from "@diffsense/core";
+import { type Card, type CardDecision, DeckSchema, resumeState } from "@diffsense/core";
 import { and, eq, or } from "drizzle-orm";
 import { decks, getDb, reviewProgress } from "./db";
 import { newestRow } from "./deck";
@@ -80,6 +80,37 @@ export async function getDecidedFingerprints(ref: ProgressRef): Promise<CardDeci
     fingerprint: r.fingerprint,
     decision: r.decision === "down" ? "down" : "up",
   }));
+}
+
+/** The deck page's resume point: where to drop the reviewer + their prior tally. */
+export interface ResumeView {
+  /** Index of the first undecided card — where `SwipeDeck` starts. */
+  index: number;
+  /** Prior 👍/👎 tally, counted per card in this deck so the resumed progress is right. */
+  counts: { up: number; down: number };
+}
+
+/**
+ * Resume point + prior tally from the reviewer's persisted decisions (issue #29).
+ * The next card is the first undecided one (`resumeState`); the up/down tally is
+ * counted by walking the deck's cards (not the decisions), so a decision whose card
+ * is not in this deck — e.g. left over from a different head SHA — is ignored and the
+ * tally stays consistent with `resumeState`'s `reviewed` count even if a deck ever
+ * carried a duplicate fingerprint.
+ */
+export function computeResume(cards: Card[], decisions: CardDecision[]): ResumeView {
+  const decisionByFingerprint = new Map(decisions.map((d) => [d.fingerprint, d.decision]));
+  const counts = { up: 0, down: 0 };
+  const decided = new Set<string>();
+  for (const card of cards) {
+    const decision = decisionByFingerprint.get(card.fingerprint);
+    if (decision) {
+      counts[decision] += 1;
+      decided.add(card.fingerprint);
+    }
+  }
+  const { nextIndex } = resumeState(cards, decided);
+  return { index: nextIndex, counts };
 }
 
 /** One row of progress as stored (a single card decision). */
