@@ -43,6 +43,7 @@ if (role === "serve") {
     enqueue: producer.enqueue,
     recordReaction: reactionStore.record,
     getDeck: deckStore.get,
+    deckApiSecret: config.deckApiSecret,
   });
   serve({ fetch: app.fetch, port: config.port });
   console.log(`diffsense serve listening on :${config.port}`);

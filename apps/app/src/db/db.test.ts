@@ -1,12 +1,13 @@
-import type { ChunkReview } from "@diffsense/core";
+import type { ChunkReview, Deck } from "@diffsense/core";
 import { eq } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { createDrizzleConventionStore } from "../adapters/conventionStore.js";
 import { createDrizzleCostStore } from "../adapters/costStore.js";
+import { createDrizzleDeckStore } from "../adapters/deckStore.js";
 import { createDrizzleFingerprintCache } from "../adapters/fingerprintCache.js";
 import { createDrizzleReactionStore } from "../adapters/reactionStore.js";
 import { createDb } from "./client.js";
-import { costs, processedEvents, reactions } from "./schema.js";
+import { costs, decks, processedEvents, reactions } from "./schema.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -112,5 +113,45 @@ describe.skipIf(!databaseUrl)("db round-trip (R6)", () => {
     expect(Number(rows[0]?.costUsd)).toBeCloseTo(36.75, 6);
     expect(rows[0]?.overThreshold).toBe(true);
     expect(rows[0]?.createdAt).toBeInstanceOf(Date);
+  });
+
+  it("persists a deck and re-fetches it by PR + head SHA, upsert replacing in place (#26)", async () => {
+    const store = createDrizzleDeckStore(db);
+    const ref = {
+      owner: `octo-${Date.now()}`,
+      repo: `demo-${Math.round(Math.random() * 1e6)}`,
+      prNumber: Math.round(Math.random() * 1e6),
+      headSha: `sha-${Math.round(Math.random() * 1e6)}`,
+    };
+    const card = {
+      fingerprint: "fp-a",
+      file: "src/auth.ts",
+      tier: "High" as const,
+      rank: 0,
+      riskScore: 4.2,
+      highlights: [{ side: "R" as const, start: 2, end: 4 }],
+      suggestions: ["checkToken() is never awaited"],
+      explanation: "Adds a token check.",
+    };
+    const deck: Deck = { ...ref, cards: [card] };
+
+    // Missing key reads back null.
+    await expect(store.get(ref)).resolves.toBeNull();
+
+    // First save persists; re-fetch round-trips through DeckSchema re-validation.
+    await store.save(deck);
+    await expect(store.get(ref)).resolves.toEqual(deck);
+
+    // Re-running on the SAME head upserts in place (this exercises the
+    // onConflictDoUpdate target == the UNIQUE(owner,repo,pr,head) constraint —
+    // a mismatch would throw here against real Postgres, which stubs cannot catch).
+    const replaced: Deck = { ...deck, cards: [{ ...card, explanation: "Revised." }] };
+    await store.save(replaced);
+
+    const after = await store.get(ref);
+    expect(after).toEqual(replaced);
+    // Exactly one row for the key — replaced, not stacked.
+    const rows = await db.select().from(decks).where(eq(decks.headSha, ref.headSha));
+    expect(rows).toHaveLength(1);
   });
 });

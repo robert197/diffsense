@@ -219,18 +219,21 @@ describe("ingress /reactions (R3)", () => {
 });
 
 describe("ingress POST /decks (#26)", () => {
-  const jsonPost = (body: unknown) =>
+  const DECK_SECRET = "deck-trigger-secret-0123456789";
+  const auth = { authorization: `Bearer ${DECK_SECRET}` };
+
+  const jsonPost = (body: unknown, headers: Record<string, string> = auth) =>
     new Request("http://localhost/decks", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...headers },
       body: JSON.stringify(body),
     });
 
   const validBody = { owner: "octo-org", repo: "demo", prNumber: 42, installationId: 12345 };
 
-  it("enqueues an on-demand review job and acks 202", async () => {
+  it("enqueues an on-demand review job and acks 202 with a valid bearer token", async () => {
     const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {});
-    const app = createServer({ webhookSecret: SECRET, enqueue });
+    const app = createServer({ webhookSecret: SECRET, enqueue, deckApiSecret: DECK_SECRET });
 
     const res = await app.request(jsonPost(validBody));
 
@@ -247,9 +250,39 @@ describe("ingress POST /decks (#26)", () => {
     expect(ref.deliveryId).toMatch(/^ondemand-/);
   });
 
-  it("rejects a malformed body with 400 and does not enqueue", async () => {
+  it("is disabled (404) and never enqueues when no deck secret is configured", async () => {
     const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {});
     const app = createServer({ webhookSecret: SECRET, enqueue });
+
+    const res = await app.request(jsonPost(validBody, {}));
+
+    expect(res.status).toBe(404);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("rejects a missing bearer token with 401 and does not enqueue", async () => {
+    const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {});
+    const app = createServer({ webhookSecret: SECRET, enqueue, deckApiSecret: DECK_SECRET });
+
+    const res = await app.request(jsonPost(validBody, {}));
+
+    expect(res.status).toBe(401);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("rejects a wrong bearer token with 401 and does not enqueue", async () => {
+    const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {});
+    const app = createServer({ webhookSecret: SECRET, enqueue, deckApiSecret: DECK_SECRET });
+
+    const res = await app.request(jsonPost(validBody, { authorization: "Bearer wrong-secret" }));
+
+    expect(res.status).toBe(401);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed body with 400 and does not enqueue", async () => {
+    const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {});
+    const app = createServer({ webhookSecret: SECRET, enqueue, deckApiSecret: DECK_SECRET });
 
     const res = await app.request(jsonPost({ owner: "o", repo: "r" }));
 
@@ -259,12 +292,12 @@ describe("ingress POST /decks (#26)", () => {
 
   it("rejects a non-JSON body with 400 and does not enqueue", async () => {
     const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {});
-    const app = createServer({ webhookSecret: SECRET, enqueue });
+    const app = createServer({ webhookSecret: SECRET, enqueue, deckApiSecret: DECK_SECRET });
 
     const res = await app.request(
       new Request("http://localhost/decks", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...auth },
         body: "not json",
       }),
     );
@@ -273,11 +306,27 @@ describe("ingress POST /decks (#26)", () => {
     expect(enqueue).not.toHaveBeenCalled();
   });
 
+  it("rejects an oversized body with 413 before enqueueing", async () => {
+    const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {});
+    const app = createServer({ webhookSecret: SECRET, enqueue, deckApiSecret: DECK_SECRET });
+
+    const res = await app.request(
+      new Request("http://localhost/decks", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...auth },
+        body: "x".repeat(70_000),
+      }),
+    );
+
+    expect(res.status).toBe(413);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
   it("returns 503 when the queue is unavailable", async () => {
     const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {
       throw new Error("redis down");
     });
-    const app = createServer({ webhookSecret: SECRET, enqueue });
+    const app = createServer({ webhookSecret: SECRET, enqueue, deckApiSecret: DECK_SECRET });
 
     const res = await app.request(jsonPost(validBody));
 
@@ -287,6 +336,7 @@ describe("ingress POST /decks (#26)", () => {
 
 describe("ingress GET /decks (#26)", () => {
   const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {});
+  const DECK_SECRET = "deck-trigger-secret-0123456789";
   const deck: Deck = {
     owner: "octo-org",
     repo: "demo",
@@ -307,7 +357,7 @@ describe("ingress GET /decks (#26)", () => {
   };
   const query = "owner=octo-org&repo=demo&pr=42&sha=abc123";
 
-  it("returns the persisted deck as JSON", async () => {
+  it("returns the persisted deck as JSON (no secret configured)", async () => {
     const getDeck = vi.fn<(ref: DeckRef) => Promise<Deck | null>>(async () => deck);
     const app = createServer({ webhookSecret: SECRET, enqueue, getDeck });
 
@@ -321,6 +371,28 @@ describe("ingress GET /decks (#26)", () => {
       prNumber: 42,
       headSha: "abc123",
     });
+  });
+
+  it("requires a bearer token when a deck secret is configured", async () => {
+    const getDeck = vi.fn<(ref: DeckRef) => Promise<Deck | null>>(async () => deck);
+    const app = createServer({
+      webhookSecret: SECRET,
+      enqueue,
+      getDeck,
+      deckApiSecret: DECK_SECRET,
+    });
+
+    const unauthorized = await app.request(`/decks?${query}`);
+    expect(unauthorized.status).toBe(401);
+    expect(getDeck).not.toHaveBeenCalled();
+
+    const authorized = await app.request(
+      new Request(`http://localhost/decks?${query}`, {
+        headers: { authorization: `Bearer ${DECK_SECRET}` },
+      }),
+    );
+    expect(authorized.status).toBe(200);
+    expect(getDeck).toHaveBeenCalledOnce();
   });
 
   it("returns 404 when the deck does not exist", async () => {

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { type ChunkReaction, ChunkReactionSchema, type Deck, type DeckRef } from "@diffsense/core";
 import { Webhooks } from "@octokit/webhooks";
 import { Hono } from "hono";
@@ -6,6 +6,8 @@ import { z } from "zod";
 import type { PrRef } from "../types.js";
 
 const MAX_BODY_BYTES = 5_000_000;
+/** Deck requests carry only a handful of identifiers — cap the body tightly. */
+const MAX_DECK_BODY_BYTES = 64_000;
 
 /** Body of an on-demand deck request (issue #26): which PR to process. */
 const DeckRequestSchema = z.object({
@@ -38,6 +40,32 @@ export interface IngressDeps {
    * does not advertise a read it cannot serve.
    */
   getDeck?: (ref: DeckRef) => Promise<Deck | null>;
+  /**
+   * Shared secret guarding the deck API (issue #26). `POST /decks` mints a
+   * GitHub installation token and spends LLM inference, so the on-demand trigger
+   * is privileged: it is **disabled (404) unless this secret is configured**, and
+   * when configured both `/decks` routes require `Authorization: Bearer <secret>`.
+   * The deck still ships on every webhook review regardless — this only gates the
+   * non-webhook trigger and the read. Safe by default: an operator who never sets
+   * it never exposes an unauthenticated paid trigger.
+   */
+  deckApiSecret?: string;
+}
+
+/**
+ * Constant-time check of an `Authorization: Bearer <token>` header against the
+ * configured secret. Returns false (never throws) on a missing/malformed header
+ * or a length mismatch — the length guard is required because `timingSafeEqual`
+ * throws on unequal-length buffers.
+ */
+function bearerOk(authHeader: string | undefined, secret: string): boolean {
+  const prefix = "Bearer ";
+  if (!authHeader || !authHeader.startsWith(prefix)) {
+    return false;
+  }
+  const token = Buffer.from(authHeader.slice(prefix.length));
+  const expected = Buffer.from(secret);
+  return token.length === expected.length && timingSafeEqual(token, expected);
 }
 
 /** Minimal shape of the `pull_request` webhook payload fields we consume. */
@@ -144,6 +172,7 @@ export function createServer({
   enqueue,
   recordReaction,
   getDeck,
+  deckApiSecret,
 }: IngressDeps): Hono {
   const app = new Hono();
   const webhooks = new Webhooks({ secret: webhookSecret });
@@ -154,10 +183,29 @@ export function createServer({
   // triggers a review run here, decoupled from the GitHub webhook: it enqueues the
   // same job the webhook does (the worker ranks, reviews, and persists the deck),
   // then acks 202 — the deck is read back via `GET /decks` once the run lands.
+  //
+  // Privileged: this mints a GitHub token + spends LLM inference, so it is OFF
+  // (404) unless `deckApiSecret` is configured, and requires a bearer token when
+  // it is. The webhook path produces the deck regardless — this is the explicit
+  // non-webhook trigger only.
   app.post("/decks", async (c) => {
+    if (!deckApiSecret) {
+      return c.json({ error: "decks trigger not enabled" }, 404);
+    }
+    if (!bearerOk(c.req.header("authorization"), deckApiSecret)) {
+      return c.json({ error: "unauthorized" }, 401);
+    }
+    // Cap the body before buffering it (parity with /webhook); the request is a
+    // handful of identifiers, so a tight cap is safe.
+    let raw: string;
+    try {
+      raw = await readBodyCapped(c.req.raw, MAX_DECK_BODY_BYTES);
+    } catch {
+      return c.json({ error: "payload too large" }, 413);
+    }
     let body: unknown;
     try {
-      body = await c.req.json();
+      body = JSON.parse(raw);
     } catch {
       return c.json({ error: "invalid JSON body" }, 400);
     }
@@ -183,10 +231,16 @@ export function createServer({
   });
 
   // Re-fetch the persisted deck for a PR at a head SHA (issue #26). Keyed by head
-  // SHA so the swipe UI resumes the exact deck it was built against.
+  // SHA so the swipe UI resumes the exact deck it was built against. When a deck
+  // secret is configured, the read requires the same bearer token (the deck holds
+  // file paths + review content); without a secret the read is gated only by the
+  // store being wired, matching the pre-existing optional-DI posture.
   app.get("/decks", async (c) => {
     if (!getDeck) {
       return c.json({ error: "decks not enabled" }, 404);
+    }
+    if (deckApiSecret && !bearerOk(c.req.header("authorization"), deckApiSecret)) {
+      return c.json({ error: "unauthorized" }, 401);
     }
     const parsed = DeckQuerySchema.safeParse({
       owner: c.req.query("owner"),

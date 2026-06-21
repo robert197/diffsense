@@ -1,4 +1,5 @@
 import parseDiff from "parse-diff";
+import { githubPath, hunkPatch } from "../diff/hunk.js";
 import type { DeckRef } from "../ports/deckStore.js";
 import { rankHunks } from "../rank/rankHunks.js";
 import { fingerprintChunk } from "../review/fingerprint.js";
@@ -61,10 +62,13 @@ function buildCards(diff: string, meta: DeckRef, findings: readonly ReviewFindin
       }
       const side: "R" | "L" = added > 0 ? "R" : "L";
       const line = added > 0 ? chunk.newStart : chunk.oldStart;
-      // Patch string must match `buildReviewChunks` byte-for-byte so the
-      // structural fingerprint equals the one the review findings were keyed by.
-      const patch = [chunk.content, ...chunk.changes.map((c) => c.content)].join("\n");
-      hunkByPos.set(`${path}\n${side}\n${line}`, { patch, highlights: highlightsOf(chunk) });
+      // `hunkPatch` is the shared construction `buildReviewChunks` also uses, so
+      // the structural fingerprint equals the one the review findings were keyed
+      // by — the card<->finding join cannot drift (packages/core/src/diff/hunk.ts).
+      hunkByPos.set(`${path}\n${side}\n${line}`, {
+        patch: hunkPatch(chunk),
+        highlights: highlightsOf(chunk),
+      });
     }
   }
 
@@ -141,11 +145,4 @@ function defaultExplanation(ranked: { file: string; added: number; deleted: numb
     parts.push(`${ranked.deleted} line${ranked.deleted === 1 ? "" : "s"} removed`);
   const change = parts.length > 0 ? parts.join(", ") : "no line changes";
   return `Changes in ${ranked.file} (${change}).`;
-}
-
-/** The path GitHub uses for the file: the new path, or the old one if deleted. */
-function githubPath(file: parseDiff.File): string | null {
-  const to = file.to && file.to !== "/dev/null" ? file.to : null;
-  const from = file.from && file.from !== "/dev/null" ? file.from : null;
-  return to ?? from;
 }

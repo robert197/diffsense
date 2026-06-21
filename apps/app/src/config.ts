@@ -21,6 +21,12 @@ const ConfigSchema = z.object({
   // Public URL of the hosted card view (apps/web). Optional: when set, the
   // ranked comment links to the per-PR cards (issue #13). When unset, no link.
   webBaseUrl: z.string().url("WEB_BASE_URL must be a valid URL").optional(),
+  // Shared secret guarding the on-demand deck API (issue #26). Optional and
+  // OFF by default: when unset, `POST /decks` is disabled (404) so no
+  // unauthenticated paid trigger is ever exposed; when set, both `/decks` routes
+  // require `Authorization: Bearer <secret>`. The deck is still produced on every
+  // webhook review regardless.
+  deckApiSecret: z.string().min(16, "DECK_API_SECRET must be at least 16 chars").optional(),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -35,6 +41,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     port: env.PORT,
     publicBaseUrl: env.PUBLIC_BASE_URL,
     webBaseUrl: env.WEB_BASE_URL,
+    deckApiSecret: env.DECK_API_SECRET,
   });
 
   if (!result.success) {

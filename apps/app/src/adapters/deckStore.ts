@@ -25,8 +25,11 @@ export function createDrizzleDeckStore(db: Database): DeckStore {
           cards: deck.cards,
         })
         .onConflictDoUpdate({
+          // Replace the cards in place on a re-run of the same head; leave
+          // `createdAt` at its original value so the column keeps meaning
+          // "first built at" rather than silently becoming "last built at".
           target: [decks.owner, decks.repo, decks.prNumber, decks.headSha],
-          set: { cards: deck.cards, createdAt: new Date() },
+          set: { cards: deck.cards },
         });
     },
 
