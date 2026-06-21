@@ -37,6 +37,7 @@ function fakePorts(opts?: { callSites?: CodeReference[] }) {
   const recorded: ReviewFinding[] = [];
   const llm: LLMProvider = {
     reviewChunk: vi.fn(async ({ chunk }) => review(chunk.file)),
+    localizeCard: vi.fn(),
     verifyFinding: vi.fn(),
     detectScopeCreep: vi.fn(),
     synthesize: vi.fn(),

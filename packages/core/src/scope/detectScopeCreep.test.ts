@@ -38,6 +38,7 @@ function fakeScoper(report: (req: ScopeRequest) => ScopeCreepReport) {
   const requests: ScopeRequest[] = [];
   const provider: LLMProvider = {
     reviewChunk: vi.fn(),
+    localizeCard: vi.fn(),
     verifyFinding: vi.fn(),
     detectScopeCreep: vi.fn(async (request: ScopeRequest): Promise<ScopeCreepReport> => {
       requests.push(request);
@@ -130,6 +131,7 @@ describe("detectScopeCreep", () => {
   it("propagates an LLM rejection to the caller", async () => {
     const provider: LLMProvider = {
       reviewChunk: vi.fn(),
+      localizeCard: vi.fn(),
       verifyFinding: vi.fn(),
       detectScopeCreep: vi.fn().mockRejectedValue(new Error("provider down")),
       synthesize: vi.fn(),

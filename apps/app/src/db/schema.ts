@@ -183,6 +183,42 @@ export const decks = pgTable(
 );
 
 /**
+ * Per-card localized prose cache (issue #28, docs/ARCHITECTURE.md §5). The swipe
+ * deck's plain-language `explanation` + "what could be wrong" `suggestions` are
+ * authored in English; when a reviewer picks another spoken language each card's
+ * prose is translated once via the `LLMProvider` port and cached here, so
+ * re-opening the deck reuses the translation instead of re-spending inference.
+ * Keyed like the review `fingerprints` cache — `(owner, repo, fingerprint)` — plus
+ * the target `language`, so a recurring chunk is translated once per language.
+ * `LocalizationStore` (in `core`) is the port; the canonical schema + migration
+ * live here, while `apps/web` (the read path) is the only reader/writer via its
+ * `lib/db.ts` mirror — the same split `web_sessions` uses. The `localized` JSON is
+ * re-validated against `LocalizedCardSchema` on read.
+ */
+export const cardLocalizations = pgTable(
+  "card_localizations",
+  {
+    id: serial("id").primaryKey(),
+    owner: text("owner").notNull(),
+    repo: text("repo").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    language: text("language").notNull(),
+    /** The translated `LocalizedCard` (explanation + suggestions), as JSON. */
+    localized: jsonb("localized").$type<unknown>().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    cardLangUnique: unique("card_localizations_owner_repo_fp_lang_unique").on(
+      table.owner,
+      table.repo,
+      table.fingerprint,
+      table.language,
+    ),
+    cardIdx: index("card_localizations_card_idx").on(table.owner, table.repo, table.fingerprint),
+  }),
+);
+
+/**
  * Per-PR inference cost (issue #12, docs/ARCHITECTURE.md §2) — product
  * observability. One append-only row per review run records the summed token
  * usage, the USD cost (token usage × per-model rate), and whether the run crossed

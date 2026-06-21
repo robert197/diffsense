@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_REVIEW_MODEL,
   DEFAULT_SYNTHESIS_MODEL,
+  LOCALIZE_SYSTEM_PROMPT,
+  buildLocalizePrompt,
   buildReviewPrompt,
   buildScopePrompt,
   buildSynthesisPrompt,
@@ -50,6 +52,7 @@ describe("createReviewProvider", () => {
     for (const LLM_PROVIDER of ["anthropic", "openai", "google"]) {
       const provider = createReviewProvider({ LLM_PROVIDER });
       expect(typeof provider.reviewChunk).toBe("function");
+      expect(typeof provider.localizeCard).toBe("function");
       expect(typeof provider.verifyFinding).toBe("function");
       expect(typeof provider.detectScopeCreep).toBe("function");
       expect(typeof provider.synthesize).toBe("function");
@@ -69,6 +72,34 @@ describe("buildReviewPrompt", () => {
     expect(prompt).toContain("File: src/auth.ts");
     expect(prompt).toContain("tier: High");
     expect(prompt).toContain("+const t = 1;");
+  });
+});
+
+describe("buildLocalizePrompt", () => {
+  it("includes the target language name, the explanation, and every suggestion", () => {
+    const prompt = buildLocalizePrompt({
+      explanation: "Adds a null-unsafe read of user.id.",
+      suggestions: ["Null is dereferenced when signed out.", "No test covers the guard."],
+      language: "es",
+    });
+    expect(prompt).toContain("Target language: Spanish");
+    expect(prompt).toContain("Adds a null-unsafe read of user.id.");
+    expect(prompt).toContain("1. Null is dereferenced when signed out.");
+    expect(prompt).toContain("2. No test covers the guard.");
+  });
+
+  it("marks an empty suggestions list rather than emitting a stray number", () => {
+    const prompt = buildLocalizePrompt({ explanation: "x", suggestions: [], language: "de" });
+    expect(prompt).toContain("Target language: German");
+    expect(prompt).toContain("(none)");
+  });
+});
+
+describe("LOCALIZE_SYSTEM_PROMPT", () => {
+  it("instructs the model to preserve code and identifiers verbatim", () => {
+    expect(LOCALIZE_SYSTEM_PROMPT).toMatch(/preserve verbatim/i);
+    expect(LOCALIZE_SYSTEM_PROMPT).toMatch(/identifiers/i);
+    expect(LOCALIZE_SYSTEM_PROMPT).toMatch(/same number of items|same order|order/i);
   });
 });
 
