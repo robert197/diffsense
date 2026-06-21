@@ -305,4 +305,21 @@ describe("getPullRequestHead", () => {
       GitHubRateLimitError,
     );
   });
+
+  it("throws a generic error (not rate-limit) on a plain 403 permission denial", async () => {
+    // resolveStaleDeck's catch must absorb this as a non-fatal "can't decide
+    // staleness" rather than mistaking it for a rate limit or an auth failure.
+    const fetchImpl = vi.fn(async () => jsonResponse({ message: "Forbidden" }, 403));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    const err = await client.getPullRequestHead("acme", "web", 7).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(GitHubRateLimitError);
+    expect(err).not.toBeInstanceOf(GitHubAuthError);
+  });
+
+  it("throws a generic error on 500 (transient upstream failure)", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ message: "boom" }, 500));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    await expect(client.getPullRequestHead("acme", "web", 7)).rejects.toThrow(/500/);
+  });
 });

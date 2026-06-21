@@ -49,6 +49,7 @@ vi.mock("./db", () => ({
 import {
   type ProgressDeckRow,
   type ProgressRow,
+  computeResume,
   getDecidedFingerprints,
   recordDecision,
   summarizeInProgress,
@@ -171,6 +172,24 @@ describe("summarizeInProgress", () => {
     expect(reviews).toEqual([]);
   });
 
+  it("excludes an untouched group whose decisions are not cards in this deck (reviewed === 0)", () => {
+    // The reviewer has a decision row for "ghost", but the matching deck holds a/b/c —
+    // so resumeState counts 0 reviewed and the group is not "in progress".
+    const reviews = summarizeInProgress(
+      [progressRow("h1", "ghost", 2000)],
+      [deckRow("h1", deck3, 1000, 1)],
+    );
+    expect(reviews).toEqual([]);
+  });
+
+  it("excludes an empty deck (total === 0) even with a decision row present", () => {
+    const reviews = summarizeInProgress(
+      [progressRow("h1", "a", 2000)],
+      [deckRow("h1", [], 1000, 1)],
+    );
+    expect(reviews).toEqual([]);
+  });
+
   it("excludes a group whose deck row is missing", () => {
     const reviews = summarizeInProgress(
       [progressRow("gone", "a", 2000)],
@@ -214,5 +233,46 @@ describe("summarizeInProgress", () => {
       [deckRow("h1", deck3, 1000, 1), otherDeck],
     );
     expect(reviews.map((r) => r.prNumber)).toEqual([8, 7]);
+  });
+});
+
+describe("computeResume", () => {
+  const deck3 = [card("a"), card("b"), card("c")];
+
+  it("starts at card 0 with an empty tally when nothing is decided", () => {
+    expect(computeResume(deck3, [])).toEqual({ index: 0, counts: { up: 0, down: 0 } });
+  });
+
+  it("resumes at the first undecided card and tallies the prior decisions (AC#3)", () => {
+    expect(computeResume(deck3, [{ fingerprint: "a", decision: "up" }])).toEqual({
+      index: 1,
+      counts: { up: 1, down: 0 },
+    });
+  });
+
+  it("counts a down (flag) decision toward the tally", () => {
+    expect(
+      computeResume(deck3, [
+        { fingerprint: "a", decision: "up" },
+        { fingerprint: "b", decision: "down" },
+      ]),
+    ).toEqual({ index: 2, counts: { up: 1, down: 1 } });
+  });
+
+  it("resumes at the first gap and counts per card even when decisions are non-contiguous", () => {
+    // a and c decided, b not — resume at b (index 1); the tally still reflects both.
+    expect(
+      computeResume(deck3, [
+        { fingerprint: "a", decision: "up" },
+        { fingerprint: "c", decision: "up" },
+      ]),
+    ).toEqual({ index: 1, counts: { up: 2, down: 0 } });
+  });
+
+  it("ignores a decision whose card is not in this deck (a different head's leftover)", () => {
+    expect(computeResume(deck3, [{ fingerprint: "ghost", decision: "down" }])).toEqual({
+      index: 0,
+      counts: { up: 0, down: 0 },
+    });
   });
 });

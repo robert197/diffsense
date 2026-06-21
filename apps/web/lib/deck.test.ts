@@ -18,7 +18,13 @@ vi.mock("./db", () => ({
   reactions: {},
 }));
 
-import { type DeckRow, latestDeckFromRows, recordSwipe, resolveCardFileTexts } from "./deck";
+import {
+  type DeckRow,
+  latestDeckFromRows,
+  newestRow,
+  recordSwipe,
+  resolveCardFileTexts,
+} from "./deck";
 import { GitHubAuthError, GitHubRateLimitError } from "./github";
 
 const ref = { owner: "acme", repo: "web", prNumber: 7 };
@@ -78,6 +84,28 @@ describe("latestDeckFromRows", () => {
     expect(latestDeckFromRows([row("sha", "not-an-array", 1000, 1)], ref)).toBeNull();
     expect(latestDeckFromRows([row("sha", null, 1000, 1)], ref)).toBeNull();
     spy.mockRestore();
+  });
+});
+
+describe("newestRow", () => {
+  // The shared tie-break the deck read (#27) and the in-progress dashboard (#29) both
+  // use; an empty input must return undefined so callers can fall back cleanly.
+  it("returns undefined for an empty input", () => {
+    expect(newestRow([])).toBeUndefined();
+  });
+
+  it("picks the highest createdAt", () => {
+    const older = row("old", [card("a")], 1000, 1);
+    const newer = row("new", [card("b")], 2000, 2);
+    expect(newestRow([older, newer])?.headSha).toBe("new");
+    expect(newestRow([newer, older])?.headSha).toBe("new");
+  });
+
+  it("breaks a createdAt tie by the higher id", () => {
+    const tieLow = row("low", [card("a")], 3000, 5);
+    const tieHigh = row("high", [card("b")], 3000, 9);
+    expect(newestRow([tieLow, tieHigh])?.headSha).toBe("high");
+    expect(newestRow([tieHigh, tieLow])?.headSha).toBe("high");
   });
 });
 
