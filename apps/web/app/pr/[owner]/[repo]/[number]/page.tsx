@@ -1,4 +1,5 @@
 import { type Finding, listFindings } from "../../../../../lib/findings";
+import { TIER_COLOR } from "../../../../../lib/ui";
 import { refute } from "./actions";
 
 /**
@@ -12,12 +13,6 @@ import { refute } from "./actions";
 export const dynamic = "force-dynamic";
 
 type Params = { owner: string; repo: string; number: string };
-
-const TIER_COLOR: Record<string, string> = {
-  High: "#f87171",
-  Medium: "#fbbf24",
-  Low: "#9ca3af",
-};
 
 export default async function PrCardsPage({ params }: { params: Promise<Params> }) {
   const { owner, repo, number } = await params;
@@ -34,6 +29,22 @@ export default async function PrCardsPage({ params }: { params: Promise<Params> 
           Reviewed changes, ordered by risk. This is advisory: a reading order and a place to push
           back on the findings, not a verdict on the PR.
         </p>
+        <a
+          href={`/pr/${owner}/${repo}/${prNumber}/deck`}
+          style={{
+            display: "inline-block",
+            marginTop: "0.85rem",
+            padding: "0.5rem 0.9rem",
+            borderRadius: 8,
+            border: "1px solid #2563eb",
+            color: "#60a5fa",
+            textDecoration: "none",
+            fontWeight: 600,
+            fontSize: "0.9rem",
+          }}
+        >
+          Swipe the deck →
+        </a>
       </header>
 
       {findings.length === 0 ? (

@@ -38,6 +38,17 @@ export const muted: CSSProperties = {
   fontSize: "0.85rem",
 };
 
+/**
+ * Risk-tier accent colours, shared by the findings list (#13) and the swipe deck
+ * (#27) so a tier always reads the same colour across surfaces. Keyed by the
+ * `Tier` enum the ranking emits ("High" | "Medium" | "Low").
+ */
+export const TIER_COLOR: Record<string, string> = {
+  High: "#f87171",
+  Medium: "#fbbf24",
+  Low: "#9ca3af",
+};
+
 export const badge: CSSProperties = {
   fontSize: "0.65rem",
   fontWeight: 700,

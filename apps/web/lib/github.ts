@@ -75,6 +75,13 @@ export interface GitHubClient {
   listInstallations(): Promise<Installation[]>;
   listInstallationRepositories(installationId: number): Promise<Repository[]>;
   listOpenPullRequests(owner: string, repo: string): Promise<PullRequest[]>;
+  /**
+   * Raw text of a file at a specific commit, or `null` when it cannot be shown as
+   * code (absent at that ref, a directory, or binary). The swipe deck (#27) uses
+   * this to render the highlighted lines a card points at, fetched at the deck's
+   * head SHA so the card's absolute line numbers line up.
+   */
+  getFileAtRef(owner: string, repo: string, path: string, ref: string): Promise<string | null>;
 }
 
 /** Construct a token-bound GitHub client. `fetchImpl` is injectable for tests. */
@@ -151,6 +158,43 @@ export function createGitHubClient(
         }
       }
       return out;
+    },
+
+    async getFileAtRef(
+      owner: string,
+      repo: string,
+      path: string,
+      ref: string,
+    ): Promise<string | null> {
+      const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+      const res = await fetchImpl(
+        `${API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(
+          repo,
+        )}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            // Raw media type returns the file bytes directly, not the JSON envelope.
+            Accept: "application/vnd.github.raw+json",
+            "X-GitHub-Api-Version": API_VERSION,
+          },
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        },
+      );
+      if (res.status === 401) {
+        throw new GitHubAuthError();
+      }
+      if (isRateLimited(res)) {
+        throw new GitHubRateLimitError(`github contents/${path} rate limited (${res.status})`);
+      }
+      // Any other failure (404 absent, 403 denied, directory, 5xx) is non-fatal —
+      // the card degrades to its highlight ranges rather than breaking the deck.
+      if (!res.ok) {
+        return null;
+      }
+      const body = await res.text();
+      // A NUL byte means binary content that cannot be shown as source lines.
+      return body.includes("\u0000") ? null : body;
     },
   };
 }
