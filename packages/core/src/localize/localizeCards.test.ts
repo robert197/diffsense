@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { LocalizationStore } from "../ports/localizationStore.js";
 import type { Card } from "../schemas/card.js";
 import type { LocalizedCard } from "../schemas/localization.js";
-import { type LocalizePorts, localizeCards } from "./localizeCards.js";
+import { LOCALIZE_CONCURRENCY, type LocalizePorts, localizeCards } from "./localizeCards.js";
 
 function card(overrides: Partial<Card> = {}): Card {
   return {
@@ -144,11 +144,13 @@ describe("localizeCards — per-card isolation + immutability", () => {
       card({ fingerprint: "b", explanation: "second" }),
       card({ fingerprint: "c", explanation: "third" }),
     ];
+    // Source cards carry one suggestion each; the provider must return one too, or
+    // the card degrades to English (the count guard). The mock honours that count.
     const localizeCard = vi.fn(async ({ explanation }: { explanation: string }) => {
       if (explanation === "second") {
         throw new Error("boom");
       }
-      return { explanation: `${explanation}-xx`, suggestions: [] };
+      return { explanation: `${explanation}-xx`, suggestions: ["sugerencia"] };
     });
     const { ports } = spyPorts({}, localizeCard);
 
@@ -158,18 +160,37 @@ describe("localizeCards — per-card isolation + immutability", () => {
     expect(out.map((c) => c.fingerprint)).toEqual(["a", "b", "c"]);
   });
 
-  it("tolerates a localized suggestion count that differs from the source", async () => {
-    // The prose is replaced wholesale (suggestions render as a flat list), so a
-    // provider that merges or splits items is tolerated rather than mispaired.
+  it("falls back to English when the localized suggestion count differs from the source", async () => {
+    // The suggestions render as a position-stable list of "what could be wrong"
+    // prompts, so a provider that drops/adds/merges items cannot be paired 1:1.
+    // Rather than silently lose a risk prompt, the card degrades to English — and
+    // the bad translation is never cached.
     const localizeCard = vi.fn(async () => ({
       explanation: "traducido",
       suggestions: ["una", "dos", "tres"],
     }));
-    const { ports } = spyPorts({}, localizeCard);
+    const { ports, save } = spyPorts({}, localizeCard);
+    const original = card({ suggestions: ["only one"] });
 
-    const [out] = await localizeCards([card({ suggestions: ["only one"] })], "es", REF, ports);
+    const [out] = await localizeCards([original], "es", REF, ports);
 
-    expect(out?.suggestions).toEqual(["una", "dos", "tres"]);
+    expect(out).toEqual(original);
+    expect(out?.explanation).toBe("Adds a null-unsafe read of user.id.");
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("falls back to English when a cached translation's suggestion count drifted", async () => {
+    // A row cached before the count guard (or for stale source prompts) is rejected
+    // on read for the same reason — never rendered as a mismatched list.
+    const cached: LocalizedCard = { explanation: "stale", suggestions: ["a", "b"] };
+    const localizeCard = vi.fn();
+    const { ports } = spyPorts({ get: vi.fn(async () => cached) }, localizeCard);
+    const original = card({ suggestions: ["only one"] });
+
+    const [out] = await localizeCards([original], "es", REF, ports);
+
+    expect(out).toEqual(original);
+    expect(localizeCard).not.toHaveBeenCalled();
   });
 
   it("never alters non-prose fields (code/identifiers/risk preserved)", async () => {
@@ -185,5 +206,52 @@ describe("localizeCards — per-card isolation + immutability", () => {
     expect(out?.rank).toBe(original.rank);
     expect(out?.riskScore).toBe(original.riskScore);
     expect(out?.highlights).toEqual(original.highlights);
+  });
+});
+
+describe("localizeCards — bounded concurrency", () => {
+  function manyCards(n: number): Card[] {
+    return Array.from({ length: n }, (_, i) =>
+      card({ fingerprint: `fp-${i}`, explanation: `e${i}` }),
+    );
+  }
+
+  /** A provider mock that records the peak number of calls in flight at once. */
+  function trackingProvider() {
+    const state = { inFlight: 0, peak: 0 };
+    const localizeCard = vi.fn(async ({ explanation }: { explanation: string }) => {
+      state.inFlight++;
+      state.peak = Math.max(state.peak, state.inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      state.inFlight--;
+      return { explanation: `${explanation}-x`, suggestions: ["s"] };
+    });
+    return { state, localizeCard };
+  }
+
+  it("keeps at most `concurrency` provider calls in flight and preserves order", async () => {
+    const cards = manyCards(20);
+    const { state, localizeCard } = trackingProvider();
+    const { ports } = spyPorts({}, localizeCard);
+
+    const out = await localizeCards(cards, "es", REF, ports, 4);
+
+    expect(state.peak).toBeLessThanOrEqual(4);
+    expect(state.peak).toBeGreaterThan(1); // actually ran concurrently, not serially
+    expect(localizeCard).toHaveBeenCalledTimes(20);
+    // Result order matches input order despite out-of-order completion.
+    expect(out.map((c) => c.explanation)).toEqual(cards.map((c) => `${c.explanation}-x`));
+    expect(out.map((c) => c.fingerprint)).toEqual(cards.map((c) => c.fingerprint));
+  });
+
+  it("defaults to LOCALIZE_CONCURRENCY when no limit is given", async () => {
+    const cards = manyCards(30);
+    const { state, localizeCard } = trackingProvider();
+    const { ports } = spyPorts({}, localizeCard);
+
+    await localizeCards(cards, "es", REF, ports);
+
+    expect(state.peak).toBeLessThanOrEqual(LOCALIZE_CONCURRENCY);
+    expect(state.peak).toBeGreaterThan(1);
   });
 });

@@ -36,6 +36,14 @@ export const DEFAULT_SYNTHESIS_MODEL = "claude-fable-5";
 /** Bounded tool budget for the agentic review unit — never runs away (§3). */
 export const REVIEW_STEP_BUDGET = 8;
 
+/**
+ * Wall-clock cap on a single `localizeCard` call (issue #28). Localization runs at
+ * read time inside the deck's server render, so a slow or hung provider must not
+ * stall the page: on timeout the call aborts and `localizeCards` degrades that card
+ * to English (its per-card fallback). Override with `LOCALIZE_TIMEOUT_MS`.
+ */
+export const DEFAULT_LOCALIZE_TIMEOUT_MS = 30_000;
+
 export interface ModelConfig {
   provider: SupportedProvider;
   /** Model id for the `review` tier (`REVIEW_MODEL`). */
@@ -281,6 +289,7 @@ export function buildLocalizePrompt({
 export function createReviewProvider(env: NodeJS.ProcessEnv = process.env): LLMProvider {
   const config = resolveModelConfig(env);
   const model = selectProvider(config, env);
+  const localizeTimeoutMs = Number(env.LOCALIZE_TIMEOUT_MS) || DEFAULT_LOCALIZE_TIMEOUT_MS;
 
   return {
     async reviewChunk(request: ReviewRequest) {
@@ -315,11 +324,14 @@ export function createReviewProvider(env: NodeJS.ProcessEnv = process.env): LLMP
         // Localization is a single structured call over the prose already in hand
         // (§3): no tools, no loop. Runs on the review-class model to keep the
         // translation pass cost-bounded, and the prompt preserves code verbatim so
-        // only natural language changes (issue #28).
+        // only natural language changes (issue #28). A timeout bounds the call so a
+        // hung provider can't stall the deck's server render — on abort the card
+        // degrades to English via localizeCards' per-card fallback.
         model: model(config.reviewModel),
         system: LOCALIZE_SYSTEM_PROMPT,
         prompt: buildLocalizePrompt(request),
         output: Output.object({ schema: LocalizedCardSchema }),
+        abortSignal: AbortSignal.timeout(localizeTimeoutMs),
       });
 
       return output;

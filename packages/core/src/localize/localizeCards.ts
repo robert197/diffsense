@@ -1,7 +1,11 @@
 import type { LLMProvider } from "../ports/llmProvider.js";
 import type { LocalizationStore } from "../ports/localizationStore.js";
 import type { Card } from "../schemas/card.js";
-import { DEFAULT_LANGUAGE, type LanguageCode } from "../schemas/localization.js";
+import {
+  DEFAULT_LANGUAGE,
+  type LanguageCode,
+  type LocalizedCard,
+} from "../schemas/localization.js";
 
 /**
  * The card-localization pass (issue #28, docs/ARCHITECTURE.md §2–§3). Pure
@@ -30,24 +34,75 @@ export interface LocalizeRef {
 }
 
 /**
+ * Max provider/cache calls in flight during one localization pass. Bounds the
+ * cold-cache fan-out so a large deck cannot fire one LLM call per card at once
+ * (the plan's "bounded concurrency" mitigation, mirroring how `resolveCardFileTexts`
+ * caps its GitHub reads). Without this a first open of an N-card deck in a new
+ * language would burst N simultaneous inference calls into the server render —
+ * rate-limit storm, render stall, and uncontrolled cost.
+ */
+export const LOCALIZE_CONCURRENCY = 6;
+
+/**
  * Translate every card's prose into `language`, in input order.
  *
  * English is the source language: when `language` is English the cards are returned
  * unchanged with zero provider/store I/O — the common path spends no inference and
  * trivially cannot alter any field. For any other language each card is localized
- * independently (concurrently); a per-card failure degrades that one card to its
- * English prose.
+ * independently, with at most `concurrency` calls in flight; a per-card failure
+ * degrades that one card to its English prose.
  */
 export async function localizeCards(
   cards: readonly Card[],
   language: LanguageCode,
   ref: LocalizeRef,
   ports: LocalizePorts,
+  concurrency: number = LOCALIZE_CONCURRENCY,
 ): Promise<Card[]> {
   if (language === DEFAULT_LANGUAGE) {
     return [...cards];
   }
-  return Promise.all(cards.map((card) => localizeOneCard(card, language, ref, ports)));
+  return mapWithConcurrency(cards, Math.max(1, concurrency), (card) =>
+    localizeOneCard(card, language, ref, ports),
+  );
+}
+
+/**
+ * Map `items` through `fn` with at most `limit` calls in flight, preserving input
+ * order in the result. A bounded worker pool: `limit` workers each pull the next
+ * index until the list is drained, so the pass never has more than `limit`
+ * provider/cache calls outstanding regardless of deck size.
+ */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    let index = cursor++;
+    while (index < items.length) {
+      // index is bounded by items.length, so the element is defined.
+      results[index] = await fn(items[index] as T, index);
+      index = cursor++;
+    }
+  };
+  const workers = Array.from({ length: Math.min(limit, items.length) }, worker);
+  await Promise.all(workers);
+  return results;
+}
+
+/**
+ * True when a localized payload keeps the source card's suggestion count. The deck
+ * renders `suggestions` as a flat, position-stable list of "what could be wrong"
+ * prompts, so a translation that drops, adds, or merges an item cannot be paired
+ * 1:1 with the source. Rather than silently lose a risk prompt, such a card is
+ * degraded to English (same per-card fallback used for errors) — code, identifiers,
+ * and risk signals are already protected by `LocalizedCardSchema`'s prose-only shape.
+ */
+function preservesSuggestionCount(card: Card, localized: LocalizedCard): boolean {
+  return localized.suggestions.length === card.suggestions.length;
 }
 
 /**
@@ -72,6 +127,13 @@ async function localizeOneCard(
   try {
     const cached = await ports.store.get(key);
     if (cached) {
+      // A stored translation whose suggestion count no longer matches the card
+      // (cached before this guard, or the source prompts changed for the same
+      // fingerprint) cannot be paired 1:1 — degrade to English rather than render
+      // a mismatched list.
+      if (!preservesSuggestionCount(card, cached)) {
+        return card;
+      }
       return { ...card, explanation: cached.explanation, suggestions: cached.suggestions };
     }
 
@@ -80,6 +142,17 @@ async function localizeOneCard(
       suggestions: card.suggestions,
       language,
     });
+
+    // The provider may drop, add, or merge a "what could be wrong" prompt despite
+    // the instruction to preserve count. We cannot trust the mapping then, so fall
+    // this card back to English instead of silently losing a risk prompt — and we
+    // do NOT cache the bad translation, so it is never reused.
+    if (!preservesSuggestionCount(card, localized)) {
+      console.error(
+        `[localize] suggestion count drift (${card.suggestions.length} -> ${localized.suggestions.length}) for ${ref.owner}/${ref.repo} ${card.fingerprint} (${language}); serving English`,
+      );
+      return card;
+    }
 
     // Best-effort cache write: a save failure must not lose the freshly translated
     // prose, so it is swallowed (logged) and the localized card is still returned.

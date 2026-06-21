@@ -88,6 +88,10 @@ export async function setLanguage(formData: FormData): Promise<void> {
     maxAge: LANGUAGE_COOKIE_MAX_AGE,
     sameSite: "lax",
     httpOnly: true,
+    // Match the app's cookie convention (sessionCookieOptions): Secure in
+    // production so the preference isn't sent over plaintext. Computed the same way
+    // as AuthConfig.secureCookies without pulling in the OAuth-secret validation.
+    secure: process.env.NODE_ENV === "production",
     path: "/",
   });
 

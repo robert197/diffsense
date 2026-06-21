@@ -204,7 +204,7 @@ export const cardLocalizations = pgTable(
     fingerprint: text("fingerprint").notNull(),
     language: text("language").notNull(),
     /** The translated `LocalizedCard` (explanation + suggestions), as JSON. */
-    localized: jsonb("localized").notNull(),
+    localized: jsonb("localized").$type<unknown>().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
