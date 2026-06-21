@@ -1,8 +1,9 @@
+import type { Card } from "@diffsense/core";
 import { redirect } from "next/navigation";
 import { clearSessionRow, requireSession } from "../../../../../../lib/auth/session";
 import { type CardView, toCardView } from "../../../../../../lib/codeWindow";
-import { getLatestDeck } from "../../../../../../lib/deck";
-import { GitHubAuthError, GitHubRateLimitError } from "../../../../../../lib/github";
+import { getLatestDeck, resolveCardFileTexts } from "../../../../../../lib/deck";
+import { GitHubAuthError } from "../../../../../../lib/github";
 import { page } from "../../../../../../lib/ui";
 import { SwipeDeck } from "./SwipeDeck";
 import { recordSwipe } from "./actions";
@@ -71,38 +72,35 @@ export default async function DeckPage({ params }: { params: Promise<Params> }) 
 
 /**
  * Resolve each card's highlighted code from the file content at the deck's head SHA,
- * deduped per file and capped. Any fetch failure degrades that card to its highlight
- * label; a GitHub 401 clears the session and redirects to login (matching the rest of
- * the entry path); a rate-limit degrades the whole deck to labels rather than failing.
+ * deduped per file and capped (via `resolveCardFileTexts`). A per-file fetch failure
+ * (rate-limit, 404, binary, transient) degrades that card to its highlight label; a
+ * GitHub 401 clears the session and redirects to login, matching the rest of the
+ * entry path. A card whose file was not fetched (beyond the cap) degrades too.
  */
 async function buildCardViews(
   github: Awaited<ReturnType<typeof requireSession>>["github"],
   owner: string,
   repo: string,
   headSha: string,
-  cards: Parameters<typeof toCardView>[0][],
+  cards: Card[],
 ): Promise<CardView[]> {
-  const uniqueFiles = [...new Set(cards.map((c) => c.file))].slice(0, MAX_CODE_FETCHES);
-  const fileText = new Map<string, string | null>();
-
-  for (const file of uniqueFiles) {
-    try {
-      fileText.set(file, await github.getFileAtRef(owner, repo, file, headSha));
-    } catch (err) {
-      if (err instanceof GitHubAuthError) {
-        await clearSessionRow();
-        redirect("/login");
-      }
-      if (err instanceof GitHubRateLimitError) {
-        // Stop fetching; the remaining cards degrade to their highlight labels.
-        break;
-      }
-      // Any other transient failure: degrade just this file.
-      fileText.set(file, null);
+  let fileText: Map<string, string | null>;
+  try {
+    fileText = await resolveCardFileTexts(
+      github,
+      owner,
+      repo,
+      headSha,
+      cards.map((c) => c.file),
+      MAX_CODE_FETCHES,
+    );
+  } catch (err) {
+    if (err instanceof GitHubAuthError) {
+      await clearSessionRow();
+      redirect("/login");
     }
+    throw err;
   }
 
-  return cards.map((card) =>
-    toCardView(card, fileText.has(card.file) ? (fileText.get(card.file) ?? null) : null),
-  );
+  return cards.map((card) => toCardView(card, fileText.get(card.file) ?? null));
 }

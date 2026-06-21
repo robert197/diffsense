@@ -18,7 +18,8 @@ vi.mock("./db", () => ({
   reactions: {},
 }));
 
-import { type DeckRow, latestDeckFromRows, recordSwipe } from "./deck";
+import { type DeckRow, latestDeckFromRows, recordSwipe, resolveCardFileTexts } from "./deck";
+import { GitHubAuthError, GitHubRateLimitError } from "./github";
 
 const ref = { owner: "acme", repo: "web", prNumber: 7 };
 
@@ -63,9 +64,67 @@ describe("latestDeckFromRows", () => {
     expect(latestDeckFromRows([tieLow, tieHigh], ref)?.headSha).toBe("high");
   });
 
-  it("throws on a malformed cards payload rather than feeding a broken deck", () => {
+  it("degrades a malformed cards payload to null (logged) instead of crashing the page", () => {
+    // Missing `highlights`/`suggestions`/`explanation` — a schema-drift / corrupt row.
     const bad = [{ fingerprint: "x", file: "a.ts", tier: "High", rank: 0, riskScore: 1 }];
-    expect(() => latestDeckFromRows([row("sha", bad, 1000, 1)], ref)).toThrow();
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(latestDeckFromRows([row("sha", bad, 1000, 1)], ref)).toBeNull();
+    expect(spy).toHaveBeenCalledOnce();
+    spy.mockRestore();
+  });
+
+  it("degrades a non-array cards payload to null rather than throwing", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(latestDeckFromRows([row("sha", "not-an-array", 1000, 1)], ref)).toBeNull();
+    expect(latestDeckFromRows([row("sha", null, 1000, 1)], ref)).toBeNull();
+    spy.mockRestore();
+  });
+});
+
+describe("resolveCardFileTexts", () => {
+  const headSha = "abc123";
+
+  it("reads each unique file once and degrades a per-file failure to null", async () => {
+    const getFileAtRef = vi.fn(async (_o: string, _r: string, path: string) => {
+      if (path === "src/a.ts") return "a\nb\nc";
+      throw new GitHubRateLimitError(); // src/b.ts is rate-limited this render
+    });
+    const map = await resolveCardFileTexts(
+      { getFileAtRef },
+      "acme",
+      "web",
+      headSha,
+      ["src/a.ts", "src/b.ts", "src/a.ts"], // a.ts appears twice
+      30,
+    );
+    expect(getFileAtRef).toHaveBeenCalledTimes(2); // deduped
+    expect(map.get("src/a.ts")).toBe("a\nb\nc");
+    expect(map.get("src/b.ts")).toBeNull(); // degraded, not thrown
+  });
+
+  it("caps the number of files fetched so a huge PR cannot fan out unbounded", async () => {
+    const getFileAtRef = vi.fn(async (_o: string, _r: string, path: string) => path);
+    const files = Array.from({ length: 50 }, (_, i) => `f${i}.ts`);
+    const map = await resolveCardFileTexts({ getFileAtRef }, "acme", "web", headSha, files, 30);
+    expect(getFileAtRef).toHaveBeenCalledTimes(30);
+    expect(map.size).toBe(30);
+    expect(map.has("f29.ts")).toBe(true);
+    expect(map.has("f30.ts")).toBe(false); // beyond the cap — card degrades to a label
+  });
+
+  it("propagates a GitHubAuthError so the page can clear the session and redirect", async () => {
+    const getFileAtRef = vi.fn(async () => {
+      throw new GitHubAuthError();
+    });
+    await expect(
+      resolveCardFileTexts({ getFileAtRef }, "acme", "web", headSha, ["src/a.ts"], 30),
+    ).rejects.toBeInstanceOf(GitHubAuthError);
+  });
+
+  it("fetches at the deck's head SHA", async () => {
+    const getFileAtRef = vi.fn(async () => "x");
+    await resolveCardFileTexts({ getFileAtRef }, "acme", "web", headSha, ["src/a.ts"], 30);
+    expect(getFileAtRef).toHaveBeenCalledWith("acme", "web", "src/a.ts", headSha);
   });
 });
 

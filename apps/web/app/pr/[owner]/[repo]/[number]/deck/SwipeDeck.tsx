@@ -11,6 +11,7 @@ import {
 } from "react";
 import type { CardView, CodeLine } from "../../../../../../lib/codeWindow";
 import { deckProgress, resolveSwipe, swipeSentiment } from "../../../../../../lib/codeWindow";
+import { TIER_COLOR } from "../../../../../../lib/ui";
 
 /**
  * The swipe deck (issue #27) — the heart of the product. Renders a PR's deck as a
@@ -22,15 +23,26 @@ import { deckProgress, resolveSwipe, swipeSentiment } from "../../../../../../li
  * fly-off at all). Strictly advisory: no merge/approve/block control anywhere.
  */
 
-const TIER_COLOR: Record<string, string> = {
-  High: "#f87171",
-  Medium: "#fbbf24",
-  Low: "#9ca3af",
-};
-
 const SWIPE_OUT_MS = 260;
 
 type Direction = "right" | "left";
+
+/** Whether the OS asks us to minimise motion. Read live so a mid-session toggle is honoured. */
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
+/** A keydown landing in a form field elsewhere on the page must not drive the deck. */
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+}
 
 export interface SwipeDeckProps {
   cards: CardView[];
@@ -49,27 +61,32 @@ export function SwipeDeck({ cards, owner, repo, prNumber, recordSwipe }: SwipeDe
 
   const dragStart = useRef<number | null>(null);
   const advanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Synchronous re-entry guard. `leaving` is React state and reads stale within the
+  // same tick, so a second commit (key auto-repeat, double-tap, button double-click)
+  // could slip past a state-based guard and double-record + skip a card. A ref is
+  // visible immediately; it is released in `advance`, once the card has moved on.
+  const committing = useRef(false);
 
   const total = cards.length;
   const current = index < total ? cards[index] : null;
   const progress = deckProgress(index, total);
 
-  const reducedMotion = useCallback(() => {
-    return (
-      typeof window !== "undefined" &&
-      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
-    );
+  const clearAdvanceTimer = useCallback(() => {
+    if (advanceTimer.current) {
+      clearTimeout(advanceTimer.current);
+      advanceTimer.current = null;
+    }
   }, []);
 
   const commit = useCallback(
     (direction: Direction) => {
       const card = cards[index];
-      if (!card || leaving) {
+      if (!card || committing.current) {
         return;
       }
+      committing.current = true;
       const sentiment = swipeSentiment(direction);
 
-      // Fire-and-forget — the decision write must never block the animation.
       const fd = new FormData();
       fd.set("owner", owner);
       fd.set("repo", repo);
@@ -77,8 +94,12 @@ export function SwipeDeck({ cards, owner, repo, prNumber, recordSwipe }: SwipeDe
       fd.set("fingerprint", card.fingerprint);
       fd.set("tier", card.tier);
       fd.set("sentiment", sentiment);
+      // Fire-and-forget — the write must never block the animation — but a rejection
+      // is logged rather than swallowed, so a lost advisory signal stays visible.
       startWrite(() => {
-        void recordSwipe(fd);
+        recordSwipe(fd).catch((err) => {
+          console.error("[deck] recordSwipe write failed", err);
+        });
       });
 
       setCounts((c) => ({
@@ -87,25 +108,35 @@ export function SwipeDeck({ cards, owner, repo, prNumber, recordSwipe }: SwipeDe
       }));
 
       const advance = () => {
+        clearAdvanceTimer();
         setLeaving(null);
         setDragX(0);
         dragStart.current = null;
+        committing.current = false;
         setIndex((i) => i + 1);
       };
 
-      if (reducedMotion()) {
+      // Cancel any timer still pending from a prior commit before scheduling, so
+      // exactly one advance is ever in flight (covers a reduced-motion toggle
+      // mid-animation and any overlap that slips the ref guard).
+      clearAdvanceTimer();
+      if (prefersReducedMotion()) {
         advance();
         return;
       }
       setLeaving(direction);
       advanceTimer.current = setTimeout(advance, SWIPE_OUT_MS);
     },
-    [cards, index, leaving, owner, repo, prNumber, recordSwipe, reducedMotion],
+    [cards, index, owner, repo, prNumber, recordSwipe, clearAdvanceTimer],
   );
 
-  // Desktop keyboard affordance: ← flags, → looks good.
+  // Desktop keyboard affordance: ← flags, → looks good. Auto-repeat (held key) and
+  // keystrokes aimed at a form field elsewhere on the page are ignored.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (e.repeat || isTypingTarget(e.target)) {
+        return;
+      }
       if (e.key === "ArrowRight") {
         commit("right");
       } else if (e.key === "ArrowLeft") {
@@ -154,6 +185,17 @@ export function SwipeDeck({ cards, owner, repo, prNumber, recordSwipe }: SwipeDe
     }
   }
 
+  // Capture ends here for every pointer outcome — pointerup, pointercancel, or the
+  // OS stealing the pointer mid-gesture. Reset any in-progress drag (unless a commit
+  // is animating) so an interrupted gesture snaps back and the next gesture never
+  // reads a stale start point.
+  function onLostPointerCapture() {
+    if (!committing.current) {
+      dragStart.current = null;
+      setDragX(0);
+    }
+  }
+
   if (total === 0) {
     return <p style={{ opacity: 0.6 }}>This deck has no cards — there is nothing to review.</p>;
   }
@@ -183,11 +225,13 @@ export function SwipeDeck({ cards, owner, repo, prNumber, recordSwipe }: SwipeDe
         {cards[index + 1] && <div style={peekStyle} aria-hidden="true" />}
 
         <div
+          data-testid="swipe-card"
           style={{ ...cardStyle, ...topStyle }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp}
+          onLostPointerCapture={onLostPointerCapture}
         >
           {intent && <IntentBadge intent={intent} />}
           <CardBody card={current} />

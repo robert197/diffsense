@@ -1,4 +1,5 @@
 import { type Finding, listFindings } from "../../../../../lib/findings";
+import { TIER_COLOR } from "../../../../../lib/ui";
 import { refute } from "./actions";
 
 /**
@@ -12,12 +13,6 @@ import { refute } from "./actions";
 export const dynamic = "force-dynamic";
 
 type Params = { owner: string; repo: string; number: string };
-
-const TIER_COLOR: Record<string, string> = {
-  High: "#f87171",
-  Medium: "#fbbf24",
-  Low: "#9ca3af",
-};
 
 export default async function PrCardsPage({ params }: { params: Promise<Params> }) {
   const { owner, repo, number } = await params;

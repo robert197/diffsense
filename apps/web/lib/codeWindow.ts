@@ -83,15 +83,21 @@ export function buildCodeWindow(
     }
   }
 
-  const isHighlighted = (line: number): boolean =>
-    right.some((h) => line >= h.start && line <= h.end);
+  // Pre-compute the highlighted line numbers once (O(total highlighted lines))
+  // so the per-rendered-line check below is O(1) instead of scanning every range.
+  const highlightedLines = new Set<number>();
+  for (const h of right) {
+    for (let n = h.start; n <= h.end; n++) {
+      highlightedLines.add(n);
+    }
+  }
 
   const lines: CodeLine[] = [];
   for (const window of merged) {
     for (let n = window.start; n <= window.end; n++) {
       // Strip a trailing CR so CRLF files don't render a stray carriage return.
       const text = (fileLines[n - 1] ?? "").replace(/\r$/, "");
-      lines.push({ number: n, text, highlighted: isHighlighted(n) });
+      lines.push({ number: n, text, highlighted: highlightedLines.has(n) });
     }
   }
   return lines.length > 0 ? lines : null;
