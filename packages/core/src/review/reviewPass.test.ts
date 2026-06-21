@@ -33,6 +33,7 @@ function fakeProvider(tag = "fake") {
       requests.push(request);
       return review(`${tag}:${request.chunk.file}:${request.modelClass}`);
     }),
+    localizeCard: vi.fn(),
     // The review pass never verifies or synthesizes — fail loudly if a refactor wires either in here.
     verifyFinding: vi.fn().mockRejectedValue(new Error("verifyFinding not expected in reviewPass")),
     detectScopeCreep: vi

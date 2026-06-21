@@ -1,6 +1,7 @@
 import type { ReviewChunk } from "../review/reviewPass.js";
 import type { AnyReviewTool } from "../review/tools.js";
 import type { ChunkReview, RiskRating } from "../schemas/chunkReview.js";
+import type { LanguageCode, LocalizedCard } from "../schemas/localization.js";
 import type { Portfolio } from "../schemas/portfolio.js";
 import type { ScopeCreepReport } from "../schemas/scopeCreep.js";
 import type { VerificationVerdict } from "../schemas/verification.js";
@@ -88,9 +89,34 @@ export interface SynthesisRequest {
   intent: PrIntent;
 }
 
+/**
+ * Everything the card-localization pass needs (issue #28). Like verify and
+ * scope-creep, it is a *single structured call, not a tool loop*
+ * (docs/ARCHITECTURE.md §3): the source prose and the target language are already
+ * in hand. The pass translates only natural language — code, identifiers, file
+ * paths, and risk scores are never touched (they live outside this request). The
+ * target `language` is never English: English is the source, so the deterministic
+ * shell short-circuits it without a call (`localizeCards`).
+ */
+export interface LocalizeRequest {
+  /** The card's English explanation to translate. */
+  explanation: string;
+  /** The card's English "what could be wrong" suggestions, order preserved. */
+  suggestions: readonly string[];
+  /** Target language to translate the prose into (never `"en"`). */
+  language: LanguageCode;
+}
+
 export interface LLMProvider {
   /** Review one chunk, returning a Zod-validated `ChunkReview`. */
   reviewChunk(request: ReviewRequest): Promise<ChunkReview>;
+  /**
+   * Translate a card's prose (explanation + suggestions) into the target
+   * language, returning a Zod-validated `LocalizedCard`. A single structured call
+   * (§3): only natural language is translated; code, identifiers, and risk signals
+   * are preserved (issue #28).
+   */
+  localizeCard(request: LocalizeRequest): Promise<LocalizedCard>;
   /**
    * Independently challenge a finding, prompted to refute it, returning a
    * Zod-validated `VerificationVerdict`. The precision lever (issue #9).

@@ -4,6 +4,8 @@ import { createOpenAI } from "@ai-sdk/openai";
 import {
   ChunkReviewSchema,
   type LLMProvider,
+  type LocalizeRequest,
+  LocalizedCardSchema,
   PortfolioSchema,
   type ReviewChunk,
   type ReviewRequest,
@@ -12,6 +14,7 @@ import {
   type SynthesisRequest,
   VerificationVerdictSchema,
   type VerifyRequest,
+  languageName,
 } from "@diffsense/core";
 import { type LanguageModel, Output, generateText, stepCountIs, tool } from "ai";
 
@@ -229,6 +232,45 @@ export function buildSynthesisPrompt({ findings, scope, intent }: SynthesisReque
 }
 
 /**
+ * System prompt: translate a card's prose into the reviewer's language without
+ * touching code (issue #28, §3). Localization widens who can review effectively;
+ * it must never alter the code, identifiers, or risk signal — only the natural
+ * language. A single structured call, like verify and scope-creep.
+ */
+export const LOCALIZE_SYSTEM_PROMPT = `You are translating a code-review card's reviewer-facing prose into another spoken language.
+
+Translate ONLY the natural language. Preserve verbatim, untranslated:
+- code, identifiers, symbols, function and type names,
+- file paths and code locations (for example src/auth.ts:12),
+- inline code spans and quoted snippets.
+
+Keep the meaning exact and the tone plain — this is a senior reviewer explaining a change, not marketing copy. Keep the suggestions as a list with the same number of items in the same order; do not add, drop, merge, or reorder them.
+
+Return:
+- explanation: the explanation translated into the target language.
+- suggestions: each suggestion translated into the target language, same count and order.`;
+
+/** The per-card user prompt — the target language plus the English prose to translate. */
+export function buildLocalizePrompt({
+  explanation,
+  suggestions,
+  language,
+}: LocalizeRequest): string {
+  const suggestionList = suggestions.length
+    ? suggestions.map((s, i) => `${i + 1}. ${s}`).join("\n")
+    : "(none)";
+  return [
+    `Target language: ${languageName(language)}`,
+    "",
+    "Explanation to translate:",
+    explanation,
+    "",
+    "Suggestions to translate (keep the count and order):",
+    suggestionList,
+  ].join("\n");
+}
+
+/**
  * Construct the `LLMProvider`. Provider + models come from env; each
  * `reviewChunk` call routes to the model class the deterministic shell chose,
  * runs the bounded tool loop, and returns a Zod-validated `ChunkReview`.
@@ -263,6 +305,21 @@ export function createReviewProvider(env: NodeJS.ProcessEnv = process.env): LLMP
         tools,
         stopWhen: stepCountIs(REVIEW_STEP_BUDGET),
         output: Output.object({ schema: ChunkReviewSchema }),
+      });
+
+      return output;
+    },
+
+    async localizeCard(request: LocalizeRequest) {
+      const { output } = await generateText({
+        // Localization is a single structured call over the prose already in hand
+        // (§3): no tools, no loop. Runs on the review-class model to keep the
+        // translation pass cost-bounded, and the prompt preserves code verbatim so
+        // only natural language changes (issue #28).
+        model: model(config.reviewModel),
+        system: LOCALIZE_SYSTEM_PROMPT,
+        prompt: buildLocalizePrompt(request),
+        output: Output.object({ schema: LocalizedCardSchema }),
       });
 
       return output;

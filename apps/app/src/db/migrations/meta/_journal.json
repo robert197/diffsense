@@ -57,6 +57,13 @@
       "when": 1782432000000,
       "tag": "0007_decks",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1782518400000,
+      "tag": "0008_card_localizations",
+      "breakpoints": true
     }
   ]
 }

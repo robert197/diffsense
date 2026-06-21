@@ -27,6 +27,7 @@ function fakeVerifier(refute: (req: VerifyRequest) => boolean) {
   const requests: VerifyRequest[] = [];
   const provider: LLMProvider = {
     reviewChunk: vi.fn(),
+    localizeCard: vi.fn(),
     verifyFinding: vi.fn(async (request: VerifyRequest): Promise<VerificationVerdict> => {
       requests.push(request);
       const refuted = refute(request);
@@ -63,6 +64,7 @@ describe("verifyFindings", () => {
   it("propagates an LLM rejection to the caller", async () => {
     const provider: LLMProvider = {
       reviewChunk: vi.fn(),
+      localizeCard: vi.fn(),
       verifyFinding: vi.fn().mockRejectedValue(new Error("provider down")),
       detectScopeCreep: vi.fn(),
       synthesize: vi.fn(),

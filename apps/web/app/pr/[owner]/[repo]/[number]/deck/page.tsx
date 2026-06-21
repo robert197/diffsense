@@ -1,10 +1,14 @@
 import type { Card } from "@diffsense/core";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { clearSessionRow, requireSession } from "../../../../../../lib/auth/session";
 import { type CardView, toCardView } from "../../../../../../lib/codeWindow";
 import { getLatestDeck, resolveCardFileTexts } from "../../../../../../lib/deck";
 import { GitHubAuthError } from "../../../../../../lib/github";
+import { LANGUAGE_COOKIE, resolveLanguageCookie } from "../../../../../../lib/language";
+import { localizeDeckCards } from "../../../../../../lib/localize";
 import { page } from "../../../../../../lib/ui";
+import { LanguagePicker } from "./LanguagePicker";
 import { SwipeDeck } from "./SwipeDeck";
 import { recordSwipe } from "./actions";
 
@@ -32,7 +36,12 @@ export default async function DeckPage({ params }: { params: Promise<Params> }) 
   const prNumber = Number(number);
   const session = await requireSession();
 
+  const language = resolveLanguageCookie((await cookies()).get(LANGUAGE_COOKIE)?.value);
   const deck = Number.isInteger(prNumber) ? await getLatestDeck({ owner, repo, prNumber }) : null;
+
+  // Translate the cards' prose into the reviewer's language (a no-op for English,
+  // graceful English fallback on any failure). Only explanation + suggestions change.
+  const cards = deck ? await localizeDeckCards(deck.cards, language, { owner, repo }) : [];
 
   return (
     <main style={page}>
@@ -50,6 +59,7 @@ export default async function DeckPage({ params }: { params: Promise<Params> }) 
           Swipe through the deck — riskiest changes first. Right if it looks good, left to flag.
           Advisory only: your swipes are signal, not a verdict.
         </p>
+        <LanguagePicker current={language} owner={owner} repo={repo} prNumber={prNumber} />
       </header>
 
       {deck === null ? (
@@ -59,7 +69,7 @@ export default async function DeckPage({ params }: { params: Promise<Params> }) 
         </p>
       ) : (
         <SwipeDeck
-          cards={await buildCardViews(session.github, owner, repo, deck.headSha, deck.cards)}
+          cards={await buildCardViews(session.github, owner, repo, deck.headSha, cards)}
           owner={owner}
           repo={repo}
           prNumber={prNumber}

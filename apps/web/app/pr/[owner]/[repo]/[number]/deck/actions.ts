@@ -1,7 +1,11 @@
 "use server";
 
+import { isSupportedLanguage } from "@diffsense/core";
+import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
 import { getSession } from "../../../../../../lib/auth/session";
 import { recordSwipe as persistSwipe } from "../../../../../../lib/deck";
+import { LANGUAGE_COOKIE, LANGUAGE_COOKIE_MAX_AGE } from "../../../../../../lib/language";
 
 /**
  * Record a swipe decision from the deck UI (issue #27). A `"use server"` action is
@@ -56,5 +60,41 @@ export async function recordSwipe(formData: FormData): Promise<void> {
     // must not surface as an error — but it must not vanish either. Log it so silent
     // signal loss is visible in server logs.
     console.error(`[deck] recordSwipe failed for ${owner}/${repo}#${prNumber}:`, err);
+  }
+}
+
+/**
+ * Set the reviewer's spoken language for card prose (issue #28). The deck's
+ * `<LanguagePicker>` form posts here; we re-check the session (this is an
+ * independently-invokable endpoint), validate the chosen code against the supported
+ * set, store it in the `df_lang` cookie, and revalidate the deck route so the server
+ * re-renders the cards in the new language. An unsupported/empty value is dropped —
+ * the deck then falls back to English. Purely a display preference: it never gates a
+ * merge and carries no authority.
+ */
+export async function setLanguage(formData: FormData): Promise<void> {
+  if (!(await getSession())) {
+    return;
+  }
+
+  const lang = String(formData.get("lang") ?? "");
+  if (!isSupportedLanguage(lang)) {
+    console.warn("[deck] setLanguage dropped unsupported language");
+    return;
+  }
+
+  const store = await cookies();
+  store.set(LANGUAGE_COOKIE, lang, {
+    maxAge: LANGUAGE_COOKIE_MAX_AGE,
+    sameSite: "lax",
+    httpOnly: true,
+    path: "/",
+  });
+
+  const owner = String(formData.get("owner") ?? "");
+  const repo = String(formData.get("repo") ?? "");
+  const prNumber = String(formData.get("prNumber") ?? "");
+  if (owner && repo && prNumber) {
+    revalidatePath(`/pr/${owner}/${repo}/${prNumber}/deck`);
   }
 }

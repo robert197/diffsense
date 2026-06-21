@@ -112,7 +112,37 @@ export const webSessions = pgTable(
   }),
 );
 
-const schema = { findings, decks, reactions, webSessions };
+/**
+ * Read/write cache for localized card prose (issue #28). Mirrors the
+ * `card_localizations` table declared in `apps/app/src/db/schema.ts` (migration
+ * `0008_card_localizations`) — lockstep, no shared schema package yet. `apps/web`
+ * is the only reader/writer: the deck read path translates a card's prose via the
+ * `LLMProvider` port on a miss and upserts it here so a re-open reuses it. The
+ * `localized` JSON is re-validated against `LocalizedCardSchema` on read.
+ */
+export const cardLocalizations = pgTable(
+  "card_localizations",
+  {
+    id: serial("id").primaryKey(),
+    owner: text("owner").notNull(),
+    repo: text("repo").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    language: text("language").notNull(),
+    localized: jsonb("localized").$type<unknown>().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    cardLangUnique: unique("card_localizations_owner_repo_fp_lang_unique").on(
+      table.owner,
+      table.repo,
+      table.fingerprint,
+      table.language,
+    ),
+    cardIdx: index("card_localizations_card_idx").on(table.owner, table.repo, table.fingerprint),
+  }),
+);
+
+const schema = { findings, decks, reactions, webSessions, cardLocalizations };
 
 let cached: ReturnType<typeof drizzle<typeof schema>> | null = null;
 

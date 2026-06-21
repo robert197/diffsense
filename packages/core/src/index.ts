@@ -8,6 +8,7 @@ export type { FingerprintCache } from "./ports/fingerprintCache.js";
 export type { FindingPrRef, FindingStore } from "./ports/findingStore.js";
 export type {
   LLMProvider,
+  LocalizeRequest,
   ReviewModelClass,
   ReviewRequest,
   ScopeRequest,
@@ -15,6 +16,7 @@ export type {
   SynthesisRequest,
   VerifyRequest,
 } from "./ports/llmProvider.js";
+export type { LocalizationKey, LocalizationStore } from "./ports/localizationStore.js";
 export type { LineRange, PrIntent, RepoReader } from "./ports/repoReader.js";
 export type { ReactionStore } from "./ports/reactionStore.js";
 export {
@@ -48,6 +50,11 @@ export {
 export { MAX_LISTED, renderRankedComment } from "./render/renderRankedComment.js";
 export { type ScopeCreepPorts, detectScopeCreep } from "./scope/detectScopeCreep.js";
 export { buildDeck } from "./deck/buildDeck.js";
+export {
+  type LocalizePorts,
+  type LocalizeRef,
+  localizeCards,
+} from "./localize/localizeCards.js";
 export { fingerprintChunk } from "./review/fingerprint.js";
 export {
   type ReviewChunk,
@@ -88,6 +95,19 @@ export {
   ReviewClaim,
   RiskRating,
 } from "./schemas/chunkReview.js";
+export {
+  DEFAULT_LANGUAGE,
+  LANGUAGE_CODES,
+  type LanguageCode,
+  LanguageCodeSchema,
+  type LocalizedCard,
+  LocalizedCardSchema,
+  SUPPORTED_LANGUAGES,
+  type SupportedLanguage,
+  isSupportedLanguage,
+  languageName,
+  resolveLanguage,
+} from "./schemas/localization.js";
 export { type ReviewFinding, ReviewFindingSchema } from "./schemas/finding.js";
 export {
   type Portfolio,
