@@ -33,6 +33,29 @@ export const findings = pgTable("findings", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * Read-model: one row per PR + head SHA, holding the ordered `Card[]` the swipe
+ * deck renders (issue #26 writes it, issue #27 reads it). Mirrors the `decks`
+ * table in `apps/app/src/db/schema.ts` (migration `0007_decks`) — lockstep, no
+ * shared schema package yet. `apps/web` only reads it; the `cards` JSON is
+ * re-validated against `DeckSchema` on read so a malformed row fails loudly.
+ */
+export const decks = pgTable(
+  "decks",
+  {
+    id: serial("id").primaryKey(),
+    owner: text("owner").notNull(),
+    repo: text("repo").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    headSha: text("head_sha").notNull(),
+    cards: jsonb("cards").$type<unknown>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    prIdx: index("decks_pr_idx").on(table.owner, table.repo, table.prNumber),
+  }),
+);
+
 /** Precision signal: the same append-only table the app's ranked comment feeds. */
 export const reactions = pgTable("reactions", {
   id: serial("id").primaryKey(),
@@ -71,7 +94,7 @@ export const webSessions = pgTable(
   }),
 );
 
-const schema = { findings, reactions, webSessions };
+const schema = { findings, decks, reactions, webSessions };
 
 let cached: ReturnType<typeof drizzle<typeof schema>> | null = null;
 

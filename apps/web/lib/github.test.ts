@@ -206,3 +206,60 @@ describe("createGitHubClient", () => {
     await expect(client.getAuthenticatedUser()).rejects.toThrow(/identity/);
   });
 });
+
+function textResponse(body: string, status = 200, headers: Record<string, string> = {}): Response {
+  return new Response(body, { status, headers: { "Content-Type": "text/plain", ...headers } });
+}
+
+describe("getFileAtRef", () => {
+  it("returns the raw file text and requests the raw media type at the ref", async () => {
+    const fetchImpl = vi.fn(async () => textResponse("line1\nline2\n"));
+    const client = createGitHubClient("gho_tok", fetchImpl as unknown as typeof fetch);
+
+    const text = await client.getFileAtRef("acme", "web", "src/a.ts", "abc123");
+
+    expect(text).toBe("line1\nline2\n");
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(String(url)).toContain("/repos/acme/web/contents/src/a.ts?ref=abc123");
+    const headers = (init as RequestInit).headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer gho_tok");
+    expect(headers.Accept).toBe("application/vnd.github.raw+json");
+  });
+
+  it("returns null when the file is absent at the ref (404)", async () => {
+    const fetchImpl = vi.fn(async () => textResponse("Not Found", 404));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    expect(await client.getFileAtRef("acme", "web", "gone.ts", "sha")).toBeNull();
+  });
+
+  it("throws GitHubAuthError on 401", async () => {
+    const fetchImpl = vi.fn(async () => textResponse("", 401));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    await expect(client.getFileAtRef("acme", "web", "a.ts", "sha")).rejects.toBeInstanceOf(
+      GitHubAuthError,
+    );
+  });
+
+  it("throws GitHubRateLimitError on 403 with rate-limit headers", async () => {
+    const fetchImpl = vi.fn(async () => textResponse("", 403, { "x-ratelimit-remaining": "0" }));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    await expect(client.getFileAtRef("acme", "web", "a.ts", "sha")).rejects.toBeInstanceOf(
+      GitHubRateLimitError,
+    );
+  });
+
+  it("percent-encodes path segments and the ref", async () => {
+    const fetchImpl = vi.fn(async () => textResponse("x"));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    await client.getFileAtRef("acme", "web", "src/a b/файл.ts", "feature/x");
+    const url = String(fetchImpl.mock.calls[0][0]);
+    expect(url).toContain("/contents/src/a%20b/%D1%84%D0%B0%D0%B9%D0%BB.ts");
+    expect(url).toContain("?ref=feature%2Fx");
+  });
+
+  it("returns null for binary content (contains a NUL byte)", async () => {
+    const fetchImpl = vi.fn(async () => textResponse(`PNG${String.fromCharCode(0)}binary`));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    expect(await client.getFileAtRef("acme", "web", "logo.png", "sha")).toBeNull();
+  });
+});

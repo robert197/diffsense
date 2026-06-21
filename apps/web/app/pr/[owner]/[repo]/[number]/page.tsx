@@ -34,6 +34,22 @@ export default async function PrCardsPage({ params }: { params: Promise<Params> 
           Reviewed changes, ordered by risk. This is advisory: a reading order and a place to push
           back on the findings, not a verdict on the PR.
         </p>
+        <a
+          href={`/pr/${owner}/${repo}/${prNumber}/deck`}
+          style={{
+            display: "inline-block",
+            marginTop: "0.85rem",
+            padding: "0.5rem 0.9rem",
+            borderRadius: 8,
+            border: "1px solid #2563eb",
+            color: "#60a5fa",
+            textDecoration: "none",
+            fontWeight: 600,
+            fontSize: "0.9rem",
+          }}
+        >
+          Swipe the deck →
+        </a>
       </header>
 
       {findings.length === 0 ? (
