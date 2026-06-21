@@ -52,6 +52,24 @@ export interface DeckRow {
 }
 
 /**
+ * Pick the newest row by `createdAt`, breaking ties by the higher `id`. The "which
+ * row is current" invariant shared by the deck read (#27) and the in-progress
+ * dashboard (#29), kept in one place so the tie-break can't drift between callers.
+ * Returns `undefined` for an empty input.
+ */
+export function newestRow<T extends { createdAt: Date; id: number }>(rows: T[]): T | undefined {
+  if (rows.length === 0) {
+    return undefined;
+  }
+  return rows.reduce((best, row) => {
+    const newerTime = row.createdAt.getTime() > best.createdAt.getTime();
+    const sameTimeHigherId =
+      row.createdAt.getTime() === best.createdAt.getTime() && row.id > best.id;
+    return newerTime || sameTimeHigherId ? row : best;
+  });
+}
+
+/**
  * Pick the newest deck row and validate it into a `Deck`, or `null` when the PR
  * has no deck yet. Pure so the selection + validation contract is unit-testable
  * without a database: newest is by `createdAt` (ties broken by `id`), and the
@@ -61,15 +79,10 @@ export interface DeckRow {
  * of 500-ing the whole route over one bad row.
  */
 export function latestDeckFromRows(rows: DeckRow[], ref: PrRef): Deck | null {
-  if (rows.length === 0) {
+  const newest = newestRow(rows);
+  if (!newest) {
     return null;
   }
-  const newest = rows.reduce((best, row) => {
-    const newerTime = row.createdAt.getTime() > best.createdAt.getTime();
-    const sameTimeHigherId =
-      row.createdAt.getTime() === best.createdAt.getTime() && row.id > best.id;
-    return newerTime || sameTimeHigherId ? row : best;
-  });
   const parsed = DeckSchema.safeParse({
     owner: ref.owner,
     repo: ref.repo,

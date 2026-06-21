@@ -3,8 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // The action delegates the DB write to lib/deck; mock it to capture the call.
 const h = vi.hoisted(() => ({
   calls: [] as unknown[][],
+  // The per-reviewer resume write (issue #29) delegates to lib/reviewProgress.
+  progressCalls: [] as unknown[][],
+  // When set, the resume write rejects — exercises the fire-and-forget catch.
+  progressReject: null as Error | null,
+  // When set, the reaction write rejects — exercises lib/deck's own catch.
+  reactionReject: null as Error | null,
   // The action gates on getSession; default to a signed-in reviewer, override per test.
-  session: { current: { login: "octocat" } as unknown },
+  session: { current: { userId: 42, login: "octocat" } as unknown },
   // setLanguage writes a cookie and revalidates the deck route; capture both.
   cookieSets: [] as Array<{ name: string; value: string; options: Record<string, unknown> }>,
   revalidated: [] as string[],
@@ -12,7 +18,13 @@ const h = vi.hoisted(() => ({
 vi.mock("../../../../../../lib/deck", () => ({
   recordSwipe: (...args: unknown[]) => {
     h.calls.push(args);
-    return Promise.resolve();
+    return h.reactionReject ? Promise.reject(h.reactionReject) : Promise.resolve();
+  },
+}));
+vi.mock("../../../../../../lib/reviewProgress", () => ({
+  recordDecision: (...args: unknown[]) => {
+    h.progressCalls.push(args);
+    return h.progressReject ? Promise.reject(h.progressReject) : Promise.resolve();
   },
 }));
 vi.mock("../../../../../../lib/auth/session", () => ({
@@ -46,6 +58,7 @@ const valid = {
   owner: "acme",
   repo: "web",
   prNumber: "7",
+  headSha: "h1",
   fingerprint: "fp",
   tier: "High",
   sentiment: "up",
@@ -54,7 +67,10 @@ const valid = {
 describe("recordSwipe action", () => {
   beforeEach(() => {
     h.calls.length = 0;
-    h.session.current = { login: "octocat" };
+    h.progressCalls.length = 0;
+    h.progressReject = null;
+    h.reactionReject = null;
+    h.session.current = { userId: 42, login: "octocat" };
   });
 
   it("persists a valid swipe with the parsed ref", async () => {
@@ -63,10 +79,60 @@ describe("recordSwipe action", () => {
     expect(h.calls[0]).toEqual([{ owner: "acme", repo: "web", prNumber: 7 }, "fp", "High", "up"]);
   });
 
+  it("records a per-reviewer decision keyed by user + PR + head SHA (issue #29)", async () => {
+    await recordSwipe(form(valid));
+    expect(h.progressCalls).toHaveLength(1);
+    expect(h.progressCalls[0]).toEqual([
+      { githubUserId: 42, owner: "acme", repo: "web", prNumber: 7, headSha: "h1" },
+      "fp",
+      "up",
+    ]);
+  });
+
+  it("forwards a down (flag) swipe to both the reaction and the resume write", async () => {
+    await recordSwipe(form({ ...valid, sentiment: "down" }));
+    expect(h.calls[0]).toEqual([{ owner: "acme", repo: "web", prNumber: 7 }, "fp", "High", "down"]);
+    expect(h.progressCalls[0]).toEqual([
+      { githubUserId: 42, owner: "acme", repo: "web", prNumber: 7, headSha: "h1" },
+      "fp",
+      "down",
+    ]);
+  });
+
+  it("stays non-throwing when the resume write rejects (fire-and-forget), reaction still recorded", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    h.progressReject = new Error("db down");
+    // The action must resolve, not reject — the swipe is fired fire-and-forget.
+    await expect(recordSwipe(form(valid))).resolves.toBeUndefined();
+    expect(h.calls).toHaveLength(1); // reaction write happened first and stuck
+    expect(h.progressCalls).toHaveLength(1); // resume write attempted, swallowed
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("still attempts the resume write when the reaction write rejects", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    h.reactionReject = new Error("reaction insert failed");
+    await expect(recordSwipe(form(valid))).resolves.toBeUndefined();
+    // A failed reaction write is logged but must not suppress the resume row.
+    expect(h.progressCalls).toHaveLength(1);
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("skips the resume write when headSha is absent but still records the reaction", async () => {
+    const f = form(valid);
+    f.delete("headSha");
+    await recordSwipe(f);
+    expect(h.calls).toHaveLength(1); // reaction still recorded (backward-safe)
+    expect(h.progressCalls).toHaveLength(0); // no head SHA → no resume row
+  });
+
   it("drops the write when there is no authenticated session", async () => {
     h.session.current = null;
     await recordSwipe(form(valid));
     expect(h.calls).toHaveLength(0);
+    expect(h.progressCalls).toHaveLength(0);
   });
 
   it("rejects a missing owner", async () => {

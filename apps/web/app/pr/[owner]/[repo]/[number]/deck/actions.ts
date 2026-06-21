@@ -6,6 +6,7 @@ import { cookies } from "next/headers";
 import { getSession } from "../../../../../../lib/auth/session";
 import { recordSwipe as persistSwipe } from "../../../../../../lib/deck";
 import { LANGUAGE_COOKIE, LANGUAGE_COOKIE_MAX_AGE } from "../../../../../../lib/language";
+import { recordDecision } from "../../../../../../lib/reviewProgress";
 
 /**
  * Record a swipe decision from the deck UI (issue #27). A `"use server"` action is
@@ -29,13 +30,15 @@ const SENTIMENTS = new Set(["up", "down"]);
 
 export async function recordSwipe(formData: FormData): Promise<void> {
   // Authentication gate: a signed-out caller hitting the action directly is dropped.
-  if (!(await getSession())) {
+  const session = await getSession();
+  if (!session) {
     return;
   }
 
   const owner = String(formData.get("owner") ?? "");
   const repo = String(formData.get("repo") ?? "");
   const prNumber = Number(formData.get("prNumber"));
+  const headSha = String(formData.get("headSha") ?? "");
   const fingerprint = String(formData.get("fingerprint") ?? "");
   const tier = String(formData.get("tier") ?? "");
   const sentiment = String(formData.get("sentiment") ?? "");
@@ -53,13 +56,32 @@ export async function recordSwipe(formData: FormData): Promise<void> {
     return;
   }
 
+  const decision = sentiment as "up" | "down";
+
   try {
-    await persistSwipe({ owner, repo, prNumber }, fingerprint, tier, sentiment as "up" | "down");
+    await persistSwipe({ owner, repo, prNumber }, fingerprint, tier, decision);
   } catch (err) {
     // The write is advisory and fired fire-and-forget from the client, so a failure
     // must not surface as an error — but it must not vanish either. Log it so silent
     // signal loss is visible in server logs.
     console.error(`[deck] recordSwipe failed for ${owner}/${repo}#${prNumber}:`, err);
+  }
+
+  // Persist the per-reviewer resume state (issue #29): one decision per card, keyed by
+  // the signed-in user + PR + head SHA, so a reload/logout/device-switch picks up at the
+  // next unreviewed card. A missing head SHA (older client) skips this write but still
+  // records the reaction above. Failures are logged, never thrown — the swipe is advisory
+  // and fired fire-and-forget from the client.
+  if (headSha) {
+    try {
+      await recordDecision(
+        { githubUserId: session.userId, owner, repo, prNumber, headSha },
+        fingerprint,
+        decision,
+      );
+    } catch (err) {
+      console.error(`[deck] recordDecision failed for ${owner}/${repo}#${prNumber}:`, err);
+    }
   }
 }
 

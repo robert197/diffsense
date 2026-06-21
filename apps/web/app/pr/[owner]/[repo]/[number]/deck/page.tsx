@@ -1,12 +1,17 @@
-import type { Card } from "@diffsense/core";
+import type { Card, CardDecision } from "@diffsense/core";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { clearSessionRow, requireSession } from "../../../../../../lib/auth/session";
+import {
+  type ActiveSession,
+  clearSessionRow,
+  requireSession,
+} from "../../../../../../lib/auth/session";
 import { type CardView, toCardView } from "../../../../../../lib/codeWindow";
 import { getLatestDeck, resolveCardFileTexts } from "../../../../../../lib/deck";
 import { GitHubAuthError } from "../../../../../../lib/github";
 import { LANGUAGE_COOKIE, resolveLanguageCookie } from "../../../../../../lib/language";
 import { localizeDeckCards } from "../../../../../../lib/localize";
+import { computeResume, getDecidedFingerprints } from "../../../../../../lib/reviewProgress";
 import { page } from "../../../../../../lib/ui";
 import { LanguagePicker } from "./LanguagePicker";
 import { SwipeDeck } from "./SwipeDeck";
@@ -39,9 +44,42 @@ export default async function DeckPage({ params }: { params: Promise<Params> }) 
   const language = resolveLanguageCookie((await cookies()).get(LANGUAGE_COOKIE)?.value);
   const deck = Number.isInteger(prNumber) ? await getLatestDeck({ owner, repo, prNumber }) : null;
 
-  // Translate the cards' prose into the reviewer's language (a no-op for English,
-  // graceful English fallback on any failure). Only explanation + suggestions change.
-  const cards = deck ? await localizeDeckCards(deck.cards, language, { owner, repo }) : [];
+  // Everything below hangs off the loaded deck and is mutually independent, so run it
+  // concurrently rather than chaining the awaits:
+  //  - the cards' prose translated into the reviewer's language (DB + maybe LLM; a
+  //    no-op for English, graceful English fallback on failure — only prose changes),
+  //  - this reviewer's persisted decisions for the deck's head SHA (issue #29),
+  //  - the live-head staleness check (one GitHub round-trip — AC#5).
+  // Keeping the GitHub call off the critical path means it overlaps the translation
+  // rather than adding to it.
+  const [cards, decisions, stale] = deck
+    ? await Promise.all([
+        localizeDeckCards(deck.cards, language, { owner, repo }),
+        // Resume is advisory: a transient failure on the decisions read must not
+        // 500 the whole deck. Degrade to "no decisions" (start at card 0) and log,
+        // matching the graceful fallback `localizeDeckCards` uses for its prose.
+        getDecidedFingerprints({
+          githubUserId: session.userId,
+          owner,
+          repo,
+          prNumber,
+          headSha: deck.headSha,
+        }).catch((err): CardDecision[] => {
+          console.error(
+            `[deck] getDecidedFingerprints failed for ${owner}/${repo}#${prNumber}; resuming from the start:`,
+            err,
+          );
+          return [];
+        }),
+        resolveStaleDeck(session, owner, repo, prNumber, deck.headSha),
+      ])
+    : ([[], [], false] as [Card[], CardDecision[], boolean]);
+
+  // A divergent live head SHA means the deck was built against an earlier commit (the
+  // re-process path); the resume index + prior tally come from the decisions above.
+  const resume = deck
+    ? computeResume(deck.cards, decisions)
+    : { index: 0, counts: { up: 0, down: 0 } };
 
   return (
     <main style={page}>
@@ -62,6 +100,8 @@ export default async function DeckPage({ params }: { params: Promise<Params> }) 
         <LanguagePicker current={language} owner={owner} repo={repo} prNumber={prNumber} />
       </header>
 
+      {stale && <StaleNotice href={`/pr/${owner}/${repo}/${prNumber}/deck`} />}
+
       {deck === null ? (
         <p style={{ opacity: 0.6, lineHeight: 1.5 }}>
           This PR's deck isn't ready yet. Once the engine has processed the PR, its cards will
@@ -73,10 +113,70 @@ export default async function DeckPage({ params }: { params: Promise<Params> }) 
           owner={owner}
           repo={repo}
           prNumber={prNumber}
+          headSha={deck.headSha}
+          initialIndex={resume.index}
+          initialCounts={resume.counts}
           recordSwipe={recordSwipe}
         />
       )}
     </main>
+  );
+}
+
+/**
+ * Is the deck stale (issue #29, AC#5)? Compare the deck's head SHA against the PR's
+ * live head from GitHub. A `401` clears the session and redirects (consistent with
+ * the rest of the entry path); a rate-limit/transient failure can't decide staleness,
+ * so the deck renders normally rather than blocking on a banner that may be wrong.
+ */
+async function resolveStaleDeck(
+  session: ActiveSession,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  deckHeadSha: string,
+): Promise<boolean> {
+  try {
+    const live = await session.github.getPullRequestHead(owner, repo, prNumber);
+    return !!live && live.headSha !== deckHeadSha;
+  } catch (err) {
+    if (err instanceof GitHubAuthError) {
+      await clearSessionRow();
+      redirect("/login");
+    }
+    // A rate-limit/transient failure can't decide staleness, so the deck renders
+    // normally rather than blocking on a banner that may be wrong. Log it so the
+    // swallowed failure stays observable (e.g. a rate-limit surge on this check).
+    console.warn(
+      `[deck] stale-deck check failed for ${owner}/${repo}#${prNumber}; rendering without the stale banner:`,
+      err,
+    );
+    return false;
+  }
+}
+
+/** Advisory banner: the deck predates the PR's current commit (the re-process path). */
+function StaleNotice({ href }: { href: string }) {
+  return (
+    <div
+      style={{
+        marginBottom: "1.1rem",
+        padding: "0.7rem 0.9rem",
+        borderRadius: 10,
+        border: "1px solid #b45309",
+        background: "rgba(180, 83, 9, 0.12)",
+        color: "#fbbf24",
+        lineHeight: 1.5,
+        fontSize: "0.88rem",
+      }}
+    >
+      <strong>This deck is out of date.</strong> The pull request has new commits since this deck
+      was built, so it reviews older code. Your place is saved — a fresh deck appears here once the
+      engine reprocesses the new commit.{" "}
+      <a href={href} style={{ color: "#fbbf24", fontWeight: 600 }}>
+        Refresh
+      </a>
+    </div>
   );
 }
 

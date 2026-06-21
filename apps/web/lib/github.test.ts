@@ -263,3 +263,63 @@ describe("getFileAtRef", () => {
     expect(await client.getFileAtRef("acme", "web", "logo.png", "sha")).toBeNull();
   });
 });
+
+describe("getPullRequestHead", () => {
+  it("returns the PR's current head SHA from the pulls endpoint", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ number: 7, head: { sha: "deadbeef" } }));
+    const client = createGitHubClient("gho_tok", fetchImpl as unknown as typeof fetch);
+
+    expect(await client.getPullRequestHead("acme", "web", 7)).toEqual({ headSha: "deadbeef" });
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(String(url)).toContain("/repos/acme/web/pulls/7");
+    const headers = (init as RequestInit).headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer gho_tok");
+  });
+
+  it("returns null when the PR no longer exists (404)", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ message: "Not Found" }, 404));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    expect(await client.getPullRequestHead("acme", "web", 9)).toBeNull();
+  });
+
+  it("returns null when the head SHA is missing from the response", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ number: 7, head: {} }));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    expect(await client.getPullRequestHead("acme", "web", 7)).toBeNull();
+  });
+
+  it("throws GitHubAuthError on 401", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ message: "Bad credentials" }, 401));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    await expect(client.getPullRequestHead("acme", "web", 7)).rejects.toBeInstanceOf(
+      GitHubAuthError,
+    );
+  });
+
+  it("throws GitHubRateLimitError on a rate-limited 403", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ message: "API rate limit exceeded" }, 403, { "x-ratelimit-remaining": "0" }),
+    );
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    await expect(client.getPullRequestHead("acme", "web", 7)).rejects.toBeInstanceOf(
+      GitHubRateLimitError,
+    );
+  });
+
+  it("throws a generic error (not rate-limit) on a plain 403 permission denial", async () => {
+    // resolveStaleDeck's catch must absorb this as a non-fatal "can't decide
+    // staleness" rather than mistaking it for a rate limit or an auth failure.
+    const fetchImpl = vi.fn(async () => jsonResponse({ message: "Forbidden" }, 403));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    const err = await client.getPullRequestHead("acme", "web", 7).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(GitHubRateLimitError);
+    expect(err).not.toBeInstanceOf(GitHubAuthError);
+  });
+
+  it("throws a generic error on 500 (transient upstream failure)", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ message: "boom" }, 500));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    await expect(client.getPullRequestHead("acme", "web", 7)).rejects.toThrow(/500/);
+  });
+});

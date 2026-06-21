@@ -1,5 +1,7 @@
+import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -215,6 +217,56 @@ export const cardLocalizations = pgTable(
       table.language,
     ),
     cardIdx: index("card_localizations_card_idx").on(table.owner, table.repo, table.fingerprint),
+  }),
+);
+
+/**
+ * Per-reviewer review progress (issue #29) — the resume state behind pause & resume.
+ * One row per (reviewer, PR, head SHA, card): the reviewer's 👍/👎 decision on that
+ * card, upserted on every swipe. Position is *derived* from these rows (the next
+ * unreviewed card is the first card with no decision), so a reload, logout, or device
+ * switch picks up exactly where the reviewer left off. Keyed by `github_user_id` (the
+ * stable identity, not the renameable login) so state is per-reviewer and portable
+ * across devices, and by `head_sha` (reusing the deck's key) so a new push reviews new
+ * code from scratch rather than silently resuming against stale lines. Canonical schema
+ * + migration live here; `apps/web` (the only reader/writer, via its `lib/db.ts` mirror)
+ * records decisions on swipe and reads them back to resume and to list in-progress
+ * reviews — the same `apps/app`/`apps/web` split `decks` and `card_localizations` use.
+ */
+export const reviewProgress = pgTable(
+  "review_progress",
+  {
+    id: serial("id").primaryKey(),
+    githubUserId: integer("github_user_id").notNull(),
+    owner: text("owner").notNull(),
+    repo: text("repo").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    headSha: text("head_sha").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    /** The per-card decision: "up" = looks good, "down" = flagged (swipe sentiment). */
+    decision: text("decision").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    // One decision per card per reviewer per head — the upsert target. Its prefix
+    // (user, owner, repo, pr, head) also serves the deck-page resume read.
+    decisionUnique: unique("review_progress_user_pr_head_fp_unique").on(
+      table.githubUserId,
+      table.owner,
+      table.repo,
+      table.prNumber,
+      table.headSha,
+      table.fingerprint,
+    ),
+    // Listing one reviewer's in-progress reviews for the dashboard stays an index scan.
+    userIdx: index("review_progress_user_idx").on(table.githubUserId),
+    // The decision domain is the swipe sentiment; enforce it at the DB so a direct
+    // insert or a future caller bypassing the action's validation can't store a value
+    // the read path would silently coerce to "up".
+    decisionCheck: check(
+      "review_progress_decision_check",
+      sql`${table.decision} in ('up', 'down')`,
+    ),
   }),
 );
 

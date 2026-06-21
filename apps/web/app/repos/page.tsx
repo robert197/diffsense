@@ -75,6 +75,17 @@ export default async function ReposPage() {
         <div>
           <h1 style={{ fontSize: "1.4rem", margin: 0 }}>Your repositories</h1>
           <p style={{ ...muted, margin: "0.3rem 0 0" }}>Signed in as {session.login}</p>
+          <a
+            href="/reviews"
+            style={{
+              color: "#60a5fa",
+              textDecoration: "none",
+              fontWeight: 600,
+              fontSize: "0.9rem",
+            }}
+          >
+            Continue reviewing →
+          </a>
         </div>
         <SignOutButton variant="pill" />
       </header>
