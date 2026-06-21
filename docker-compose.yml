@@ -76,6 +76,9 @@ services:
 
   web:
     build: .
+    # env_file brings the OAuth secrets + SESSION_SECRET + WEB_BASE_URL the entry
+    # path needs (#25); app-env overrides DATABASE_URL/REDIS_URL to the services.
+    env_file: .env
     environment:
       <<: *app-env
       ROLE: web

@@ -38,6 +38,7 @@ function fakePorts(opts?: { callSites?: CodeReference[] }) {
   const llm: LLMProvider = {
     reviewChunk: vi.fn(async ({ chunk }) => review(chunk.file)),
     verifyFinding: vi.fn(),
+    detectScopeCreep: vi.fn(),
     synthesize: vi.fn(),
   };
   const cache: FingerprintCache = {
