@@ -4,16 +4,18 @@ import {
   createReviewTools,
   reviewAndPersistFindings,
 } from "@diffsense/core";
+import type { PrStatusStore } from "@diffsense/core";
 import { createReviewProvider } from "@diffsense/llm";
 import { Worker } from "bullmq";
 import { Redis } from "ioredis";
-import { App } from "octokit";
 import { createAstGrepCodeSearch } from "../adapters/codeSearch.js";
 import { createDrizzleConventionStore } from "../adapters/conventionStore.js";
 import { createDrizzleDeckStore } from "../adapters/deckStore.js";
 import { createDrizzleFindingStore } from "../adapters/findingStore.js";
 import { createDrizzleFingerprintCache } from "../adapters/fingerprintCache.js";
 import type { GitHubClient } from "../adapters/github.js";
+import { createGitHubApp } from "../adapters/githubApp.js";
+import { createDrizzlePrStatusStore } from "../adapters/prStatusStore.js";
 import { type RepoReaderClient, createGitHubRepoReader } from "../adapters/repoReader.js";
 import type { Config } from "../config.js";
 import { type Database, createDb } from "../db/client.js";
@@ -39,13 +41,17 @@ const MAX_SOURCE_FILES = 50;
 export function startWorker(config: Config): Worker<PrRef> {
   const connection = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
   connection.on("error", (err) => console.error("worker redis error:", err));
-  const app = new App({ appId: config.githubAppId, privateKey: config.githubPrivateKey });
+  // Rate-limit-aware App (issue #31, R5): the installation Octokit it mints carries
+  // the throttling + retry plugins, so both the review diff fetch and the status
+  // poll respect GitHub's budget.
+  const app = createGitHubApp(config);
 
   // One DB pool for every store-backed port. The deck store is wired on *every*
   // run — the deck is deterministic, so it does not depend on an LLM — while the
   // agentic review pass is wired only when an LLM key is present.
   const { db } = createDb(config.databaseUrl);
   const deckStore = createDrizzleDeckStore(db);
+  const prStatusStore = createDrizzlePrStatusStore(db);
   const review = buildReviewSupport(config, db);
 
   const worker = new Worker<PrRef>(
@@ -67,6 +73,9 @@ export function startWorker(config: Config): Worker<PrRef> {
         reviewFindings: review?.makeRunner(octokit, ref, headSha),
         persistDeck: makeDeckPersister(deckStore, ref, headSha),
       });
+      // Track this PR as open so background sync can later reconcile it (issue #31).
+      // Best-effort and additive — a seed failure must never sink the ranked comment.
+      await seedPrStatus(prStatusStore, ref);
     },
     { connection },
   );
@@ -81,6 +90,26 @@ export function startWorker(config: Config): Worker<PrRef> {
   });
 
   return worker;
+}
+
+/**
+ * Track a freshly reviewed PR as `open` so the background poll has a row (with an
+ * installation id) to reconcile later (issue #31). Best-effort: a failure logs and
+ * returns rather than throwing, so it never sinks the guaranteed ranked comment.
+ * `seedOpen` never clobbers a terminal merged/closed status, so a late `synchronize`
+ * can't resurrect a PR that already left the active list.
+ */
+async function seedPrStatus(store: PrStatusStore, ref: PrRef): Promise<void> {
+  try {
+    await store.seedOpen({
+      owner: ref.owner,
+      repo: ref.repo,
+      prNumber: ref.prNumber,
+      installationId: ref.installationId,
+    });
+  } catch (err) {
+    console.error(`could not seed pr_status for ${ref.owner}/${ref.repo}#${ref.prNumber}:`, err);
+  }
 }
 
 interface ReviewSupport {

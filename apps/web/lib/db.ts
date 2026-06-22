@@ -222,6 +222,35 @@ export const prComments = pgTable(
   }),
 );
 
+/**
+ * Per-PR lifecycle status (issue #31). Mirrors the `pr_status` table declared in
+ * `apps/app/src/db/schema.ts` (migration `0011_pr_status`) — lockstep, no shared
+ * schema package yet. `apps/web` only reads it: the dashboard joins each reviewer's
+ * `review_progress` groups against it to move merged/closed PRs out of the active
+ * list into a badged "Done" view. Background sync (`apps/app`) is the only writer.
+ */
+export const prStatus = pgTable(
+  "pr_status",
+  {
+    id: serial("id").primaryKey(),
+    owner: text("owner").notNull(),
+    repo: text("repo").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    status: text("status").notNull(),
+    installationId: integer("installation_id").notNull(),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    prUnique: unique("pr_status_owner_repo_pr_unique").on(table.owner, table.repo, table.prNumber),
+    pollIdx: index("pr_status_poll_idx").on(table.status, table.syncedAt),
+    statusCheck: check(
+      "pr_status_status_check",
+      sql`${table.status} in ('open', 'merged', 'closed')`,
+    ),
+  }),
+);
+
 const schema = {
   findings,
   decks,
@@ -230,6 +259,7 @@ const schema = {
   cardLocalizations,
   reviewProgress,
   prComments,
+  prStatus,
 };
 
 let cached: ReturnType<typeof drizzle<typeof schema>> | null = null;

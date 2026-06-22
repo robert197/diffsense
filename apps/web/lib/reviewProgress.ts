@@ -1,6 +1,12 @@
-import { type Card, type CardDecision, DeckSchema, resumeState } from "@diffsense/core";
+import {
+  type Card,
+  type CardDecision,
+  DeckSchema,
+  isArchivedStatus,
+  resumeState,
+} from "@diffsense/core";
 import { and, eq, or } from "drizzle-orm";
-import { decks, getDb, reviewProgress } from "./db";
+import { decks, getDb, prStatus, reviewProgress } from "./db";
 import { newestRow } from "./deck";
 
 /**
@@ -148,6 +154,27 @@ export interface InProgressReview {
   updatedAt: Date;
 }
 
+/** One finished review for the dashboard's "Done" view — its PR has merged or closed. */
+export interface ArchivedReview {
+  owner: string;
+  repo: string;
+  prNumber: number;
+  headSha: string;
+  reviewed: number;
+  total: number;
+  /** The PR lifecycle label the badge shows. */
+  status: "merged" | "closed";
+  updatedAt: Date;
+}
+
+/** A PR's lifecycle status row (mirrors `pr_status`), keyed per PR (issue #31). */
+export interface PrStatusRow {
+  owner: string;
+  repo: string;
+  prNumber: number;
+  status: string;
+}
+
 // GitHub owner / repo names and commit SHAs cannot contain "/", so it is a
 // collision-free separator for the composite map keys below.
 function prKey(owner: string, repo: string, prNumber: number): string {
@@ -155,21 +182,25 @@ function prKey(owner: string, repo: string, prNumber: number): string {
 }
 
 /**
- * Project a reviewer's raw progress + deck rows into the dashboard's in-progress
- * list. Pure, so the selection contract is unit-testable without a database:
+ * Project a reviewer's raw progress + deck + PR-status rows into the dashboard's two
+ * buckets (issue #29 + #31). Pure, so the selection contract is unit-testable without
+ * a database:
  * - groups decisions by `(owner, repo, prNumber, headSha)`;
  * - validates the matching deck's cards against `DeckSchema`, computing
  *   `reviewed / total` via the same `resumeState` kernel the deck page uses;
- * - drops groups that are untouched (`reviewed === 0`), finished (`reviewed === total`),
- *   or whose deck row is missing/malformed (logged, never thrown);
- * - flags a group `stale` when a newer deck exists for the PR than the head it
- *   targets (the cheap, DB-only staleness signal the dashboard shows);
- * - returns the surviving reviews newest-activity first.
+ * - drops groups that are untouched (`reviewed === 0`) or whose deck row is
+ *   missing/malformed (logged, never thrown);
+ * - routes a touched group whose PR has merged/closed into `archived` (badged Done),
+ *   regardless of completeness — deduped to one row per PR (newest activity);
+ * - otherwise keeps an open PR with `0 < reviewed < total` in `active`, flagged
+ *   `stale` when a newer deck exists for the PR than the head it targets;
+ * - returns each bucket newest-activity first.
  */
-export function summarizeInProgress(
+export function summarizeSessions(
   progressRows: ProgressRow[],
   deckRows: ProgressDeckRow[],
-): InProgressReview[] {
+  statusRows: PrStatusRow[],
+): { active: InProgressReview[]; archived: ArchivedReview[] } {
   // Group deck rows per PR, and index them by exact head for the total card count.
   const decksByPr = new Map<string, ProgressDeckRow[]>();
   const deckByHead = new Map<string, ProgressDeckRow>();
@@ -224,7 +255,16 @@ export function summarizeInProgress(
     }
   }
 
-  const reviews: InProgressReview[] = [];
+  // PR lifecycle status, keyed per PR — what routes a session to the Done bucket.
+  const statusByPr = new Map<string, string>();
+  for (const s of statusRows) {
+    statusByPr.set(prKey(s.owner, s.repo, s.prNumber), s.status);
+  }
+
+  const active: InProgressReview[] = [];
+  // Collapse archived to one row per PR (a reviewer may have touched several heads):
+  // keep the most-recently-updated group so "Done" never shows a PR twice.
+  const archivedByPr = new Map<string, ArchivedReview>();
   for (const group of groups.values()) {
     const pr = prKey(group.owner, group.repo, group.prNumber);
     const deck = deckByHead.get(`${pr}/${group.headSha}`);
@@ -247,12 +287,38 @@ export function summarizeInProgress(
       continue;
     }
     const { total, reviewed } = resumeState(parsed.data.cards, group.decided);
-    if (total === 0 || reviewed === 0 || reviewed === total) {
-      // Nothing started, an empty deck, or already finished — not "in progress".
+    if (total === 0 || reviewed === 0) {
+      // Nothing started or an empty deck — neither in progress nor a finished session.
+      continue;
+    }
+
+    const status = statusByPr.get(pr) ?? "open";
+    if (isArchivedStatus(status as "merged" | "closed")) {
+      // The PR has merged/closed — a finished session, shown in Done regardless of
+      // how far the reviewer got. Keep only the newest touched head per PR.
+      const candidate: ArchivedReview = {
+        owner: group.owner,
+        repo: group.repo,
+        prNumber: group.prNumber,
+        headSha: group.headSha,
+        reviewed,
+        total,
+        status: status === "merged" ? "merged" : "closed",
+        updatedAt: group.updatedAt,
+      };
+      const existing = archivedByPr.get(pr);
+      if (!existing || candidate.updatedAt.getTime() > existing.updatedAt.getTime()) {
+        archivedByPr.set(pr, candidate);
+      }
+      continue;
+    }
+
+    if (reviewed === total) {
+      // Finished on a still-open PR — not "in progress", not archived. (Existing behavior.)
       continue;
     }
     const current = latestHead.get(pr);
-    reviews.push({
+    active.push({
       owner: group.owner,
       repo: group.repo,
       prNumber: group.prNumber,
@@ -264,16 +330,36 @@ export function summarizeInProgress(
     });
   }
 
-  return reviews.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+  const byNewest = (a: { updatedAt: Date }, b: { updatedAt: Date }) =>
+    b.updatedAt.getTime() - a.updatedAt.getTime();
+  return {
+    active: active.sort(byNewest),
+    archived: [...archivedByPr.values()].sort(byNewest),
+  };
 }
 
 /**
- * List one reviewer's in-progress reviews for the "Continue reviewing" dashboard.
- * Loads the reviewer's decisions, then the decks for the PRs they have touched, and
- * hands both to `summarizeInProgress`. Deck breadth is bounded by the reviewer's own
- * in-progress set; a fuller paginated dashboard is deferred.
+ * Backward-compatible projection of just the active "Continue reviewing" list, with
+ * no PR-status input (every tracked PR treated as open). Retained for callers and
+ * tests that predate the Done split (#31).
  */
-export async function listInProgress(githubUserId: number): Promise<InProgressReview[]> {
+export function summarizeInProgress(
+  progressRows: ProgressRow[],
+  deckRows: ProgressDeckRow[],
+): InProgressReview[] {
+  return summarizeSessions(progressRows, deckRows, []).active;
+}
+
+/**
+ * List one reviewer's review sessions for the dashboard (issue #29 + #31), split into
+ * the active "Continue reviewing" list and the "Done" archive (PRs merged/closed in the
+ * background). Loads the reviewer's decisions, then the decks and PR-status rows for the
+ * PRs they have touched, and hands all three to `summarizeSessions`. Breadth is bounded
+ * by the reviewer's own touched set; a fuller paginated dashboard is deferred.
+ */
+export async function listReviewSessions(
+  githubUserId: number,
+): Promise<{ active: InProgressReview[]; archived: ArchivedReview[] }> {
   const db = getDb();
   const progressRows: ProgressRow[] = await db
     .select({
@@ -289,10 +375,10 @@ export async function listInProgress(githubUserId: number): Promise<InProgressRe
     .where(eq(reviewProgress.githubUserId, githubUserId));
 
   if (progressRows.length === 0) {
-    return [];
+    return { active: [], archived: [] };
   }
 
-  // Distinct PRs the reviewer has progress on → one OR-of-ANDs filter for their decks.
+  // Distinct PRs the reviewer has progress on → an OR-of-ANDs filter per table.
   const seen = new Set<string>();
   const prRefs: Array<{ owner: string; repo: string; prNumber: number }> = [];
   for (const row of progressRows) {
@@ -303,28 +389,57 @@ export async function listInProgress(githubUserId: number): Promise<InProgressRe
     }
   }
 
-  const deckRows: ProgressDeckRow[] = await db
-    .select({
-      owner: decks.owner,
-      repo: decks.repo,
-      prNumber: decks.prNumber,
-      headSha: decks.headSha,
-      cards: decks.cards,
-      createdAt: decks.createdAt,
-      id: decks.id,
-    })
-    .from(decks)
-    .where(
-      or(
-        ...prRefs.map((ref) =>
-          and(
-            eq(decks.owner, ref.owner),
-            eq(decks.repo, ref.repo),
-            eq(decks.prNumber, ref.prNumber),
+  const [deckRows, statusRows] = await Promise.all([
+    db
+      .select({
+        owner: decks.owner,
+        repo: decks.repo,
+        prNumber: decks.prNumber,
+        headSha: decks.headSha,
+        cards: decks.cards,
+        createdAt: decks.createdAt,
+        id: decks.id,
+      })
+      .from(decks)
+      .where(
+        or(
+          ...prRefs.map((ref) =>
+            and(
+              eq(decks.owner, ref.owner),
+              eq(decks.repo, ref.repo),
+              eq(decks.prNumber, ref.prNumber),
+            ),
           ),
         ),
       ),
-    );
+    db
+      .select({
+        owner: prStatus.owner,
+        repo: prStatus.repo,
+        prNumber: prStatus.prNumber,
+        status: prStatus.status,
+      })
+      .from(prStatus)
+      .where(
+        or(
+          ...prRefs.map((ref) =>
+            and(
+              eq(prStatus.owner, ref.owner),
+              eq(prStatus.repo, ref.repo),
+              eq(prStatus.prNumber, ref.prNumber),
+            ),
+          ),
+        ),
+      ),
+  ]);
 
-  return summarizeInProgress(progressRows, deckRows);
+  return summarizeSessions(progressRows, deckRows as ProgressDeckRow[], statusRows);
+}
+
+/**
+ * Backward-compatible loader for just the active "Continue reviewing" list. Retained
+ * for callers and tests that predate the Done split (#31).
+ */
+export async function listInProgress(githubUserId: number): Promise<InProgressReview[]> {
+  return (await listReviewSessions(githubUserId)).active;
 }

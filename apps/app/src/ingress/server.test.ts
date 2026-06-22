@@ -5,7 +5,7 @@ import openedFixture from "../../test/fixtures/pull_request.opened.json" with { 
 import synchronizeFixture from "../../test/fixtures/pull_request.synchronize.json" with {
   type: "json",
 };
-import type { PrRef } from "../types.js";
+import type { PrRef, PrStatusUpdateJob } from "../types.js";
 import { createServer } from "./server.js";
 
 const SECRET = "test-webhook-secret";
@@ -76,7 +76,7 @@ describe("ingress /webhook (R2)", () => {
     expect(enqueue).not.toHaveBeenCalled();
   });
 
-  it("acks non-target actions with 204 and does not enqueue", async () => {
+  it("acks closed with 204 when no status queue is wired", async () => {
     const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {});
     const app = createServer({ webhookSecret: SECRET, enqueue });
     const body = JSON.stringify({ ...openedFixture, action: "closed" });
@@ -85,6 +85,78 @@ describe("ingress /webhook (R2)", () => {
 
     expect(res.status).toBe(204);
     expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("enqueues a merged status write on closed and does not run a review (#31)", async () => {
+    const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {});
+    const enqueueStatus = vi.fn<(job: PrStatusUpdateJob) => Promise<void>>(async () => {});
+    const app = createServer({ webhookSecret: SECRET, enqueue, enqueueStatus });
+    const body = JSON.stringify({
+      ...openedFixture,
+      action: "closed",
+      pull_request: { ...openedFixture.pull_request, merged: true, state: "closed" },
+    });
+
+    const res = await post(app, body, baseHeaders(body));
+
+    expect(res.status).toBe(202);
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(enqueueStatus).toHaveBeenCalledWith({
+      owner: "octo-org",
+      repo: "demo",
+      prNumber: 42,
+      installationId: 12345,
+      state: "closed",
+      merged: true,
+      deliveryId: "delivery-123",
+    });
+  });
+
+  it("records merged=false for a closed-not-merged PR (#31)", async () => {
+    const enqueueStatus = vi.fn<(job: PrStatusUpdateJob) => Promise<void>>(async () => {});
+    const app = createServer({
+      webhookSecret: SECRET,
+      enqueue: vi.fn(async () => {}),
+      enqueueStatus,
+    });
+    const body = JSON.stringify({
+      ...openedFixture,
+      action: "closed",
+      pull_request: { ...openedFixture.pull_request, merged: false, state: "closed" },
+    });
+
+    const res = await post(app, body, baseHeaders(body));
+
+    expect(res.status).toBe(202);
+    expect(enqueueStatus.mock.calls[0]?.[0]).toMatchObject({ state: "closed", merged: false });
+  });
+
+  it("maps reopened back to open status (#31)", async () => {
+    const enqueueStatus = vi.fn<(job: PrStatusUpdateJob) => Promise<void>>(async () => {});
+    const app = createServer({
+      webhookSecret: SECRET,
+      enqueue: vi.fn(async () => {}),
+      enqueueStatus,
+    });
+    const body = JSON.stringify({ ...openedFixture, action: "reopened" });
+
+    const res = await post(app, body, baseHeaders(body));
+
+    expect(res.status).toBe(202);
+    expect(enqueueStatus.mock.calls[0]?.[0]).toMatchObject({ state: "open", merged: false });
+  });
+
+  it("ignores an unrelated action with 204 even when the status queue is wired (#31)", async () => {
+    const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {});
+    const enqueueStatus = vi.fn<(job: PrStatusUpdateJob) => Promise<void>>(async () => {});
+    const app = createServer({ webhookSecret: SECRET, enqueue, enqueueStatus });
+    const body = JSON.stringify({ ...openedFixture, action: "labeled" });
+
+    const res = await post(app, body, baseHeaders(body));
+
+    expect(res.status).toBe(204);
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(enqueueStatus).not.toHaveBeenCalled();
   });
 
   it("returns 503 when the queue is unavailable", async () => {
