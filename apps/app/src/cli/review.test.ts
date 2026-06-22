@@ -1,4 +1,4 @@
-import type { Deck, DeckStore, FindingStore, ReviewFinding } from "@diffsense/core";
+import type { Deck, DeckStore, ReviewFinding } from "@diffsense/core";
 import { describe, expect, it, vi } from "vitest";
 import type { GitHubClient } from "../adapters/github.js";
 import type { Database } from "../db/client.js";
@@ -73,6 +73,7 @@ interface Harness {
   getRepoInstallation: ReturnType<typeof vi.fn>;
   createApp: ReturnType<typeof vi.fn>;
   openDb: ReturnType<typeof vi.fn>;
+  close: ReturnType<typeof vi.fn>;
   runReviewForRef: ReturnType<typeof vi.fn>;
 }
 
@@ -83,9 +84,11 @@ function makeHarness(
       data: { id: number };
     }>;
     deck?: Deck | null;
-    findings?: ReviewFinding[];
+    findings?: readonly ReviewFinding[];
     reviewSupport?: ReviewSupport | null;
     runResult?: RunReviewResult;
+    runImpl?: () => Promise<RunReviewResult>;
+    closeImpl?: () => Promise<void>;
   } = {},
 ): Harness {
   const out: string[] = [];
@@ -106,15 +109,16 @@ function makeHarness(
     save: vi.fn(async () => {}),
     get: vi.fn(async () => (over.deck === undefined ? makeDeck() : over.deck)),
   };
-  const findingStore: FindingStore = {
-    replaceForPr: vi.fn(async () => {}),
-    listByPr: vi.fn(async () => over.findings ?? [finding]),
-  };
-  const close = vi.fn(async () => {});
+  const close = vi.fn(over.closeImpl ?? (async () => {}));
   const openDb = vi.fn(() => ({ db: {} as Database, close }));
   const runReviewForRef = vi.fn(
-    async (): Promise<RunReviewResult> =>
-      over.runResult ?? { headSha: "abc123", upsert: { action: "created", commentId: 999 } },
+    over.runImpl ??
+      (async (): Promise<RunReviewResult> =>
+        over.runResult ?? {
+          headSha: "abc123",
+          upsert: { action: "created", commentId: 999 },
+          findings: over.findings ?? [finding],
+        }),
   );
 
   const deps: ReviewCommandDeps = {
@@ -123,7 +127,6 @@ function makeHarness(
     createApp,
     openDb,
     createDeckStore: () => deckStore,
-    createFindingStore: () => findingStore,
     buildReviewSupport: () =>
       over.reviewSupport === undefined
         ? ({ makeRunner: vi.fn() } as ReviewSupport)
@@ -132,7 +135,7 @@ function makeHarness(
     newDeliveryId: () => "fixed-id",
   };
 
-  return { deps, io, out, err, getRepoInstallation, createApp, openDb, runReviewForRef };
+  return { deps, io, out, err, getRepoInstallation, createApp, openDb, close, runReviewForRef };
 }
 
 describe("parseReviewArgs (#32 U5)", () => {
@@ -160,10 +163,18 @@ describe("parseReviewArgs (#32 U5)", () => {
   it("throws on a non-integer installation id", () => {
     expect(() => parseReviewArgs(["o/r#1", "--installation-id", "x"])).toThrow(/positive integer/);
   });
+  it("throws a clear error when --installation-id has no value (trailing flag)", () => {
+    expect(() => parseReviewArgs(["o/r#1", "--installation-id"])).toThrow(/requires a value/);
+  });
+  it("throws when --installation-id is followed by another flag, not a value", () => {
+    expect(() => parseReviewArgs(["o/r#1", "--installation-id", "--json"])).toThrow(
+      /requires a value/,
+    );
+  });
 });
 
 describe("runReviewCommand (#32 U5)", () => {
-  it("happy path: emits exactly one JSON object with deck + findings, returns 0", async () => {
+  it("happy path: emits exactly one JSON object with deck + findings, returns 0, closes db", async () => {
     const h = makeHarness();
     const code = await runReviewCommand(["octo-org/demo#42"], h.deps, h.io);
 
@@ -182,21 +193,40 @@ describe("runReviewCommand (#32 U5)", () => {
     // installation resolved from the repo (no flag/env id), one review run.
     expect(h.getRepoInstallation).toHaveBeenCalledOnce();
     expect(h.runReviewForRef).toHaveBeenCalledOnce();
+    // The db handle is always closed.
+    expect(h.close).toHaveBeenCalledOnce();
   });
 
-  it("LLM-off: reports llm:false but still emits the deck, returns 0", async () => {
-    const h = makeHarness({ reviewSupport: null });
+  it("findings come from the run, not a store read-back (deck and findings agree on the run)", async () => {
+    const h = makeHarness({
+      runResult: {
+        headSha: "abc123",
+        upsert: { action: "updated", commentId: 7 },
+        findings: [finding],
+      },
+    });
+    const code = await runReviewCommand(["octo-org/demo#42"], h.deps, h.io);
+
+    expect(code).toBe(0);
+    const parsed = JSON.parse(h.out[0] as string);
+    expect(parsed.findings).toEqual([finding]);
+    expect(parsed.comment).toEqual({ action: "updated", commentId: 7 });
+  });
+
+  it("LLM-off: reports llm:false with empty findings but still emits the deck, returns 0", async () => {
+    const h = makeHarness({ reviewSupport: null, findings: [] });
     const code = await runReviewCommand(["octo-org/demo#42"], h.deps, h.io);
 
     expect(code).toBe(0);
     const parsed = JSON.parse(h.out[0] as string);
     expect(parsed.llm).toBe(false);
+    expect(parsed.findings).toEqual([]);
     expect(parsed.deck.cards).toHaveLength(2);
   });
 
   it("emits deck:null when the head SHA could not be resolved", async () => {
     const h = makeHarness({
-      runResult: { headSha: undefined, upsert: { action: "created", commentId: 5 } },
+      runResult: { headSha: undefined, upsert: { action: "created", commentId: 5 }, findings: [] },
       deck: null,
     });
     const code = await runReviewCommand(["octo-org/demo#42"], h.deps, h.io);
@@ -204,6 +234,21 @@ describe("runReviewCommand (#32 U5)", () => {
     expect(code).toBe(0);
     const parsed = JSON.parse(h.out[0] as string);
     expect(parsed.headSha).toBeNull();
+    expect(parsed.deck).toBeNull();
+  });
+
+  it("emits deck:null when the head resolved but the deck was not stored (deck build degraded)", async () => {
+    // headSha present, but the store has no deck for it (the best-effort deck step
+    // failed inside the seam). The output must not pretend a deck exists.
+    const h = makeHarness({
+      runResult: { headSha: "abc123", upsert: { action: "created", commentId: 9 }, findings: [] },
+      deck: null,
+    });
+    const code = await runReviewCommand(["octo-org/demo#42"], h.deps, h.io);
+
+    expect(code).toBe(0);
+    const parsed = JSON.parse(h.out[0] as string);
+    expect(parsed.headSha).toBe("abc123");
     expect(parsed.deck).toBeNull();
   });
 
@@ -245,6 +290,36 @@ describe("runReviewCommand (#32 U5)", () => {
     expect(h.out).toEqual([]);
   });
 
+  it("a 404 thrown deep in the pipeline (PR deleted mid-run) also → exit 4, db closed", async () => {
+    const h = makeHarness({
+      runImpl: async () => {
+        throw Object.assign(new Error("Not Found"), { response: { status: 404 } });
+      },
+    });
+    const code = await runReviewCommand(["octo-org/demo#42"], h.deps, h.io);
+
+    expect(code).toBe(4);
+    expect(h.out).toEqual([]);
+    // The handle opened before the failing run is still torn down.
+    expect(h.close).toHaveBeenCalledOnce();
+  });
+
+  it("an unexpected runtime error from the pipeline → exit 1, diagnostic on stderr, db closed", async () => {
+    const h = makeHarness({
+      runImpl: async () => {
+        throw new Error("postgres connection reset");
+      },
+    });
+    const code = await runReviewCommand(["octo-org/demo#42"], h.deps, h.io);
+
+    expect(code).toBe(1);
+    expect(h.out).toEqual([]);
+    expect(h.err).toHaveLength(1);
+    expect(h.err[0]).toMatch(/postgres connection reset/);
+    // Even on a runtime failure the db handle is released (finally block).
+    expect(h.close).toHaveBeenCalledOnce();
+  });
+
   it("config error → exit 3", async () => {
     const h = makeHarness({
       loadConfig: () => {
@@ -255,5 +330,19 @@ describe("runReviewCommand (#32 U5)", () => {
 
     expect(code).toBe(3);
     expect(h.out).toEqual([]);
+  });
+
+  it("a failing db close is reported to stderr but does not change a success exit code", async () => {
+    const h = makeHarness({
+      closeImpl: async () => {
+        throw new Error("pool drain failed");
+      },
+    });
+    const code = await runReviewCommand(["octo-org/demo#42"], h.deps, h.io);
+
+    // The review succeeded; the close failure is surfaced but non-fatal.
+    expect(code).toBe(0);
+    expect(h.out).toHaveLength(1);
+    expect(h.err.some((l) => /closing db/.test(l))).toBe(true);
   });
 });

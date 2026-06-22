@@ -1,5 +1,6 @@
 import {
   type DeckStore,
+  type ReviewFinding,
   type ReviewFindingsContext,
   createReviewTools,
   reviewAndPersistFindings,
@@ -52,6 +53,16 @@ export interface RunReviewResult {
   headSha: string | undefined;
   /** Result of the idempotent ranked-comment delivery. */
   upsert: UpsertResult;
+  /**
+   * The findings *this* run produced — empty when no LLM is configured or when
+   * the agentic pass threw (the seam swallows that to protect the ranked
+   * comment). Returned directly rather than re-read from the store: `FindingStore`
+   * is PR-scoped (not head-scoped) and only rewritten when the pass succeeds, so
+   * a store read-back would surface a *prior* run's findings on a no-LLM or
+   * failed re-run. This keeps the emitted findings consistent with the deck and
+   * with the `llm` flag.
+   */
+  findings: readonly ReviewFinding[];
 }
 
 /**
@@ -67,14 +78,29 @@ export async function runReviewForRef(
   deps: ReviewRunnerDeps,
 ): Promise<RunReviewResult> {
   const headSha = await resolveHeadSha(octokit, ref);
+
+  // Capture exactly the findings this run produces. The seam hands them to the
+  // deck persister but only returns the comment upsert, so we wrap the runner to
+  // record its output. If the runner throws, the seam catches it and `findings`
+  // stays empty — the contract the CLI relies on.
+  let findings: readonly ReviewFinding[] = [];
+  const baseRunner = deps.reviewSupport?.makeRunner(octokit, ref, headSha);
+  const reviewFindings: ReviewFindingsRunner | undefined = baseRunner
+    ? async (ctx) => {
+        const produced = await baseRunner(ctx);
+        findings = produced;
+        return produced;
+      }
+    : undefined;
+
   // PrRef is a superset of PullRequestEvent — pass it directly.
   const upsert = await handlePullRequestEvent(ref, octokit, {
     reactionBaseUrl: deps.reactionBaseUrl,
     cardViewBaseUrl: deps.cardViewBaseUrl,
-    reviewFindings: deps.reviewSupport?.makeRunner(octokit, ref, headSha),
+    reviewFindings,
     persistDeck: makeDeckPersister(deps.deckStore, ref, headSha),
   });
-  return { headSha, upsert };
+  return { headSha, upsert, findings };
 }
 
 export interface ReviewSupport {

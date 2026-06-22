@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { createDrizzleDeckStore } from "../adapters/deckStore.js";
-import { createDrizzleFindingStore } from "../adapters/findingStore.js";
 import { createGitHubApp } from "../adapters/githubApp.js";
 import { createDb } from "../db/client.js";
 import { buildReviewSupport, runReviewForRef } from "../worker/reviewRunner.js";
@@ -44,7 +43,6 @@ async function main(): Promise<number> {
       return { db, close: () => client.end() };
     },
     createDeckStore: createDrizzleDeckStore,
-    createFindingStore: createDrizzleFindingStore,
     buildReviewSupport,
     runReviewForRef,
     newDeliveryId: () => randomUUID(),
@@ -56,11 +54,27 @@ async function main(): Promise<number> {
   });
 }
 
+/**
+ * Flush stdout before forcing exit. `process.exit` can truncate buffered stdout
+ * when it is a pipe under backpressure (a slow `jq`/agent reader on a large
+ * deck) — the single-JSON-object contract must survive that, so wait for the
+ * write queue to drain first.
+ */
+function flushStdout(): Promise<void> {
+  return new Promise((resolve) => {
+    process.stdout.write("", () => resolve());
+  });
+}
+
 main()
-  .then((code) => process.exit(code))
-  .catch((err) => {
+  .then(async (code) => {
+    await flushStdout();
+    process.exit(code);
+  })
+  .catch(async (err) => {
     // Last-resort guard: runReviewCommand catches its own errors, so reaching here
     // means a wiring/programming fault. Report it and exit non-zero.
     process.stderr.write(`diffsense: fatal: ${err instanceof Error ? err.stack : String(err)}\n`);
+    await flushStdout();
     process.exit(1);
   });

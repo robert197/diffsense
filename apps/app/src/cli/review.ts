@@ -1,4 +1,4 @@
-import type { DeckStore, FindingStore } from "@diffsense/core";
+import type { DeckStore } from "@diffsense/core";
 import type { GitHubClient } from "../adapters/github.js";
 import type { Database } from "../db/client.js";
 import type { PrRef } from "../types.js";
@@ -44,7 +44,6 @@ export interface ReviewCommandDeps {
   createApp: (cfg: CliConfig) => GitHubAppLike;
   openDb: (databaseUrl: string) => DbHandleLike;
   createDeckStore: (db: Database) => DeckStore;
-  createFindingStore: (db: Database) => FindingStore;
   buildReviewSupport: (db: Database) => ReviewSupport | null;
   runReviewForRef: (
     octokit: GitHubClient,
@@ -75,7 +74,18 @@ export function parseReviewArgs(argv: string[]): ReviewArgs {
       continue;
     }
     if (arg === "--installation-id" || arg.startsWith("--installation-id=")) {
-      const raw = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : argv[++i];
+      let raw: string | undefined;
+      if (arg.includes("=")) {
+        raw = arg.slice(arg.indexOf("=") + 1);
+      } else {
+        raw = argv[i + 1];
+        // A trailing flag (or one followed by another option) has no value — say
+        // so explicitly rather than coercing `undefined`/a flag to NaN.
+        if (raw === undefined || raw.startsWith("-")) {
+          throw new UsageError("--installation-id requires a value, e.g. --installation-id 42");
+        }
+        i++;
+      }
       const n = Number(raw);
       if (!Number.isInteger(n) || n <= 0) {
         throw new UsageError(`--installation-id expects a positive integer, got "${raw}"`);
@@ -126,7 +136,6 @@ export async function runReviewCommand(
     const handle = deps.openDb(cfg.databaseUrl);
     close = handle.close;
     const deckStore = deps.createDeckStore(handle.db);
-    const findingStore = deps.createFindingStore(handle.db);
     const reviewSupport = deps.buildReviewSupport(handle.db);
 
     const ref: PrRef = {
@@ -138,21 +147,20 @@ export async function runReviewCommand(
       deliveryId: `cli-${deps.newDeliveryId()}`,
     };
 
-    const { headSha, upsert } = await deps.runReviewForRef(octokit, ref, {
+    // `findings` come straight back from the run (the exact set this pass
+    // produced), so they always agree with the deck and the `llm` flag. The deck
+    // is read back from the store because it is persisted, not returned; it is
+    // head-keyed, so it is read only when the head resolved.
+    const { headSha, upsert, findings } = await deps.runReviewForRef(octokit, ref, {
       deckStore,
       reviewSupport,
       reactionBaseUrl: cfg.publicBaseUrl,
       cardViewBaseUrl: cfg.webBaseUrl,
     });
 
-    // Two independent reads after the review run has finished its writes — fetch
-    // the persisted deck and findings concurrently.
-    const [deck, findings] = await Promise.all([
-      headSha
-        ? deckStore.get({ owner: pr.owner, repo: pr.repo, prNumber: pr.prNumber, headSha })
-        : Promise.resolve(null),
-      findingStore.listByPr({ owner: pr.owner, repo: pr.repo, prNumber: pr.prNumber }),
-    ]);
+    const deck = headSha
+      ? await deckStore.get({ owner: pr.owner, repo: pr.repo, prNumber: pr.prNumber, headSha })
+      : null;
 
     const output = buildReviewOutput({
       pr,
@@ -169,7 +177,9 @@ export async function runReviewCommand(
     return exitCodeForError(err);
   } finally {
     if (close) {
-      await close().catch(() => {});
+      // Don't let a teardown failure mask the primary outcome, but don't hide it
+      // either — a failed pool drain is what keeps a CLI process from exiting.
+      await close().catch((err) => io.stderr(`diffsense review: closing db: ${errorMessage(err)}`));
     }
   }
 }

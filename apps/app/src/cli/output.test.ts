@@ -110,6 +110,9 @@ describe("exitCodeForError (#32 U4)", () => {
   it("maps CliConfigError to 3", () => {
     expect(exitCodeForError(new CliConfigError("missing creds"))).toBe(3);
   });
+  it("maps a GitHub 401 (bad creds) to 3", () => {
+    expect(exitCodeForError({ status: 401 })).toBe(3);
+  });
   it("maps a GitHub 404 to 4", () => {
     expect(exitCodeForError({ status: 404 })).toBe(4);
   });

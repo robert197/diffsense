@@ -59,6 +59,21 @@ const ref: PrRef = {
   deliveryId: "cli-test",
 };
 
+/** A finding the fake review pass produces, to assert it flows out of the run. */
+const finding: ReviewFinding = {
+  owner: "octo-org",
+  repo: "demo",
+  prNumber: 42,
+  fingerprint: "fp-0",
+  file: "a.ts",
+  tier: "Low",
+  rank: 0,
+  explanation: "Adds a const.",
+  claims: [],
+  reasons: [],
+  blastRadius: [],
+};
+
 /** A DeckStore that records every save so tests can assert what landed. */
 function recordingDeckStore() {
   const saved: Deck[] = [];
@@ -78,16 +93,18 @@ afterEach(() => {
 });
 
 describe("runReviewForRef (#32 — shared by worker + CLI)", () => {
-  it("resolves the head SHA, runs the review pass + deck, and returns the upsert", async () => {
+  it("resolves the head SHA, runs the review pass + deck, and returns the upsert + findings", async () => {
     const fake = makeFakeOctokit({ headSha: "abc123" });
     const { store, saved } = recordingDeckStore();
-    const runner = vi.fn(async (_ctx: ReviewRunContext): Promise<ReviewFinding[]> => []);
+    const runner = vi.fn(async (_ctx: ReviewRunContext): Promise<ReviewFinding[]> => [finding]);
     const reviewSupport: ReviewSupport = { makeRunner: vi.fn(() => runner) };
 
     const result = await runReviewForRef(fake.octokit, ref, { deckStore: store, reviewSupport });
 
     expect(result.headSha).toBe("abc123");
     expect(result.upsert).toEqual({ action: "created", commentId: 999 });
+    // The findings the pass produced flow straight back out of the run.
+    expect(result.findings).toEqual([finding]);
     // The review pass was wired with the resolved head and actually ran.
     expect(reviewSupport.makeRunner).toHaveBeenCalledWith(fake.octokit, ref, "abc123");
     expect(runner).toHaveBeenCalledOnce();
@@ -96,6 +113,24 @@ describe("runReviewForRef (#32 — shared by worker + CLI)", () => {
     expect(saved[0]?.headSha).toBe("abc123");
     expect(saved[0]?.cards.length).toBeGreaterThan(0);
     // The guaranteed ranked comment shipped.
+    expect(fake.createComment).toHaveBeenCalledOnce();
+  });
+
+  it("returns empty findings (never a prior run's) when the review pass throws, comment still ships", async () => {
+    const fake = makeFakeOctokit({ headSha: "abc123" });
+    const { store } = recordingDeckStore();
+    const runner = vi.fn(async (): Promise<ReviewFinding[]> => {
+      throw new Error("LLM exploded mid-pass");
+    });
+    const reviewSupport: ReviewSupport = { makeRunner: vi.fn(() => runner) };
+
+    const result = await runReviewForRef(fake.octokit, ref, { deckStore: store, reviewSupport });
+
+    // The seam swallows the pass failure; the run reports no findings rather than
+    // leaking whatever the PR-scoped store happened to hold.
+    expect(result.findings).toEqual([]);
+    // ...and the guaranteed ranked comment still ships.
+    expect(result.upsert.action).toBe("created");
     expect(fake.createComment).toHaveBeenCalledOnce();
   });
 
@@ -113,6 +148,9 @@ describe("runReviewForRef (#32 — shared by worker + CLI)", () => {
     // ...but the ranked comment is the guaranteed deliverable and still ships.
     expect(result.upsert.action).toBe("created");
     expect(fake.createComment).toHaveBeenCalledOnce();
+    // The review pass still runs over the diff even without a head, so its
+    // findings flow back (the deck just can't be keyed to a head).
+    expect(result.findings).toEqual([]);
   });
 
   it("runs with no LLM (reviewSupport null): seam gets no findings runner, deck still persists", async () => {
@@ -128,6 +166,8 @@ describe("runReviewForRef (#32 — shared by worker + CLI)", () => {
     expect(saved).toHaveLength(1);
     expect(saved[0]?.headSha).toBe("def456");
     expect(fake.createComment).toHaveBeenCalledOnce();
+    // No LLM wired → no agentic pass → no findings.
+    expect(result.findings).toEqual([]);
   });
 });
 

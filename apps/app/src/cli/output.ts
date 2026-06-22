@@ -18,9 +18,9 @@ export interface ReviewOutput {
   comment: { action: UpsertResult["action"]; commentId: number };
   /** The ordered deck of cards, or `null` when the head was unresolved / no deck stored. */
   deck: Deck | null;
-  /** Per-chunk agentic findings (empty when no LLM ran). */
-  findings: ReviewFinding[];
-  /** Whether the agentic review pass ran (an LLM provider key was configured). */
+  /** Per-chunk agentic findings this run produced (empty when no LLM ran). */
+  findings: readonly ReviewFinding[];
+  /** Whether an LLM provider was configured (the agentic pass was attempted). */
   llm: boolean;
 }
 
@@ -29,7 +29,7 @@ export interface BuildReviewOutputInput {
   headSha: string | undefined;
   upsert: UpsertResult;
   deck: Deck | null;
-  findings: ReviewFinding[];
+  findings: readonly ReviewFinding[];
   llm: boolean;
 }
 
@@ -61,7 +61,8 @@ function httpStatusOf(err: unknown): number | undefined {
 /**
  * Map a thrown error to the CLI's exit code (issue #32, KTD4):
  *   2 — usage error (bad args / unparseable ref)
- *   3 — config/auth configuration error (missing creds)
+ *   3 — config/auth configuration error (missing/invalid creds), incl. a GitHub
+ *       401 from a structurally-valid-but-wrong App key/installation
  *   4 — GitHub access: PR/repo not found or forbidden (404/403)
  *   1 — any other runtime error
  */
@@ -69,6 +70,9 @@ export function exitCodeForError(err: unknown): number {
   if (err instanceof UsageError) return 2;
   if (err instanceof CliConfigError) return 3;
   const status = httpStatusOf(err);
+  // 401 = bad credentials (wrong private key / installation) — a config problem,
+  // not a per-repo access one. Keep it in the same bucket as missing creds.
+  if (status === 401) return 3;
   if (status === 404 || status === 403) return 4;
   return 1;
 }

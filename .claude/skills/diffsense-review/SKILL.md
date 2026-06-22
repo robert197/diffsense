@@ -9,7 +9,8 @@ description: >-
   agentic review → ordered Deck of cards → advisory ranked PR comment) over the
   same Postgres stores, then emits the ordered deck and per-chunk findings as
   machine-readable JSON with meaningful exit codes. This is the agent-native
-  surface: anything the reviewer can do in the UI, an agent can do here.
+  surface for the review pipeline: it runs the same review and returns the same
+  risk-ordered deck and findings the hosted card view shows.
 ---
 
 # diffsense review (agent CLI)
@@ -53,11 +54,14 @@ pnpm diffsense review <pr-ref>
 
 - `owner/repo#123`
 - `owner/repo/123`
-- `https://github.com/owner/repo/pull/123` (a trailing `/files`, query, or `#hash` is fine)
+- `https://github.com/owner/repo/pull/123` (a trailing `/files`, query, or `#hash` is fine;
+  `http://` is also accepted, though GitHub only serves `https`)
 
 `--installation-id <n>` (optional) names the GitHub App installation hosting the repo.
 Omit it and the CLI resolves it from the repo automatically. It can also be set via
 `GITHUB_INSTALLATION_ID`; the flag wins.
+
+`--json` is accepted but has no effect — output is always the JSON object described below.
 
 ---
 
@@ -97,7 +101,8 @@ to `jq`. Shape:
 {
   "pr": { "owner": "octo-org", "repo": "demo", "prNumber": 42 },
   "headSha": "abc123…",            // PR head the deck/findings are keyed to (null if unresolved)
-  "comment": { "action": "created", "commentId": 999 },  // the advisory ranked comment upsert
+  "comment": { "action": "created", "commentId": 999 },  // upsert: action is "created" on the
+                                    // first run for this PR, "updated" on every later run
   "deck": {                         // the ordered deck (null if head unresolved / no deck stored)
     "owner": "octo-org", "repo": "demo", "prNumber": 42, "headSha": "abc123…",
     "cards": [                      // ordered: rank 0 = highest structural risk, review first
@@ -117,6 +122,7 @@ to `jq`. Shape:
   },
   "findings": [                     // per-chunk agentic findings (empty when "llm" is false)
     {
+      "owner": "octo-org", "repo": "demo", "prNumber": 42,   // PR coordinates (always present)
       "file": "src/auth.ts", "fingerprint": "…", "tier": "High", "rank": 0,
       "explanation": "…",
       "claims": [{ "claim": "token may be null", "evidence": "src/auth.ts:2" }],
@@ -124,7 +130,8 @@ to `jq`. Shape:
       "blastRadius": ["src/login.ts:10 login()"]
     }
   ],
-  "llm": true                       // whether the agentic review pass ran
+  "llm": true                       // whether an LLM provider was configured (the agentic
+                                    // pass was attempted); findings is [] when false
 }
 ```
 
@@ -142,8 +149,8 @@ finding to specific code.
 |---|---|
 | `0` | Review ran; JSON emitted on stdout |
 | `1` | Unexpected runtime error |
-| `2` | Usage error — missing/unparseable `<pr-ref>`, unknown flag |
-| `3` | Configuration error — missing/invalid creds or `DATABASE_URL` |
+| `2` | Usage error — missing/unparseable `<pr-ref>`, unknown flag, or `--installation-id` with no value |
+| `3` | Configuration error — missing/invalid env or flags, or a GitHub `401` from a wrong App key/installation |
 | `4` | GitHub access — PR/repo not found or forbidden (404/403); often means the App isn't installed on the repo |
 
 Script accordingly: treat `0` as success, branch on the rest.
@@ -176,8 +183,17 @@ bin/diffsense review https://github.com/octo-org/demo/pull/42 \
   PR (created on first run, edited in place after) — this is part of "the same pipeline,"
   not a separate action. There is no dry-run mode in this slice.
 - **No LLM key ≠ failure.** Without a provider key you still get a full ranked deck; only
-  the agentic `findings` (and `claims`/`blastRadius`) are absent and `"llm": false`.
-- **`deck` can be `null`** if the PR head SHA could not be resolved (e.g. transient GitHub
-  error) — the ranked comment still ships; re-run to get the deck.
+  the agentic `findings` (and `claims`/`blastRadius`) are absent and `"llm": false`. The
+  `findings` array always reflects *this* run — it is empty whenever `"llm"` is false (or
+  the agentic pass errored), never a stale prior run's findings.
+- **`deck` can be `null`** when the PR head SHA could not be resolved (a transient GitHub
+  error → `headSha` is also `null`), or when the deck build itself degraded (then `headSha`
+  is non-null but `deck` is still `null`). The ranked comment still ships; re-run to get the
+  deck. Guard `deck` before reading `deck.cards`. `findings` may be non-empty even when
+  `deck` is `null` (the agentic pass runs on the diff regardless of head resolution).
+- **Scope:** this slice covers the review pipeline — running a review and reading its
+  risk-ordered deck/findings (plus the advisory ranked comment the pipeline always upserts).
+  Card-level PR comments and 👍/👎 reactions are web-UI-only for now; they are not yet
+  exposed as CLI subcommands.
 - **Self-host:** point `DATABASE_URL` at your Postgres. The CLI bypasses the queue, so no
   Redis is needed for a one-off review.
