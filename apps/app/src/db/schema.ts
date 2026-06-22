@@ -338,3 +338,45 @@ export const costs = pgTable("costs", {
   overThreshold: boolean("over_threshold").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Per-PR lifecycle status (issue #31) — what background merge-status sync keeps
+ * current so the dashboard can move a finished PR out of "Continue reviewing" into
+ * a done view. One row per PR (not per head or per reviewer): merge/close is a
+ * property of the PR, shared across every reviewer and deck. `status` is the derived
+ * label (`open` → `merged`/`closed`), updated from two sources that both upsert here:
+ * the `closed`/`reopened` webhook (fast path) and the periodic background poll
+ * (fallback that reconciles status drifted while the app was offline). `installation_id`
+ * lets the poll mint a token to re-read the PR; `synced_at` orders the bounded poll
+ * batch (oldest first) so it stays within GitHub's rate budget. `PrStatusStore` (in
+ * `core`) is the port; `apps/web` reads this table directly via its `lib/db.ts` mirror
+ * for the dashboard split — the same `apps/app`/`apps/web` split `decks` uses.
+ */
+export const prStatus = pgTable(
+  "pr_status",
+  {
+    id: serial("id").primaryKey(),
+    owner: text("owner").notNull(),
+    repo: text("repo").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    /** Derived lifecycle label the dashboard splits active vs. done on. */
+    status: text("status").notNull(),
+    /** The GitHub App installation that can re-read this PR during the poll. */
+    installationId: integer("installation_id").notNull(),
+    /** Last reconcile time — the poll walks the oldest-synced open PRs first. */
+    syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Last status change time — shown on the dashboard's done rows. */
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    // One row per PR — the upsert target for both the webhook and the poll.
+    prUnique: unique("pr_status_owner_repo_pr_unique").on(table.owner, table.repo, table.prNumber),
+    // The poll's bounded scan: still-open PRs, oldest-synced first.
+    pollIdx: index("pr_status_poll_idx").on(table.status, table.syncedAt),
+    // The lifecycle domain is closed; enforce it at the DB like the swipe sentiment.
+    statusCheck: check(
+      "pr_status_status_check",
+      sql`${table.status} in ('open', 'merged', 'closed')`,
+    ),
+  }),
+);

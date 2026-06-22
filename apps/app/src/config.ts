@@ -27,6 +27,11 @@ const ConfigSchema = z.object({
   // require `Authorization: Bearer <secret>`. The deck is still produced on every
   // webhook review regardless.
   deckApiSecret: z.string().min(16, "DECK_API_SECRET must be at least 16 chars").optional(),
+  // Background PR merge-status sync (issue #31). The poll fallback reconciles PRs
+  // that merged/closed while the app was offline; the interval trades freshness for
+  // GitHub rate budget, and the batch caps how many PRs one tick re-reads (R5).
+  prStatusPollIntervalMs: z.coerce.number().int().positive().default(300_000),
+  prStatusPollBatch: z.coerce.number().int().positive().default(50),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -42,6 +47,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     publicBaseUrl: env.PUBLIC_BASE_URL,
     webBaseUrl: env.WEB_BASE_URL,
     deckApiSecret: env.DECK_API_SECRET,
+    prStatusPollIntervalMs: env.PR_STATUS_POLL_INTERVAL_MS,
+    prStatusPollBatch: env.PR_STATUS_POLL_BATCH,
   });
 
   if (!result.success) {

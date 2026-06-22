@@ -18,6 +18,13 @@ export type {
   VerifyRequest,
 } from "./ports/llmProvider.js";
 export type { LocalizationKey, LocalizationStore } from "./ports/localizationStore.js";
+export type { PrStatusReader } from "./ports/prStatusReader.js";
+export type {
+  PrStatusPollRow,
+  PrStatusRecord,
+  PrStatusSeed,
+  PrStatusStore,
+} from "./ports/prStatusStore.js";
 export type { LineRange, PrIntent, RepoReader } from "./ports/repoReader.js";
 export type { ReactionStore } from "./ports/reactionStore.js";
 export {
@@ -125,6 +132,13 @@ export {
   PrUsageSchema,
 } from "./schemas/cost.js";
 export { type ChunkReaction, ChunkReactionSchema } from "./schemas/reaction.js";
+export {
+  type PrLifecycle,
+  PrLifecycleSchema,
+  type PrStatusValue,
+  PrStatusValueSchema,
+} from "./schemas/prStatus.js";
+export { derivePrStatus, isArchivedStatus, reconcilePrStatus } from "./status/prStatus.js";
 export {
   type PostedComment,
   PostedCommentSchema,

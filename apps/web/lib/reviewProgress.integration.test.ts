@@ -1,11 +1,12 @@
 import type { Card } from "@diffsense/core";
 import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { decks, getDb, reviewProgress } from "./db";
+import { decks, getDb, prStatus, reviewProgress } from "./db";
 import {
   computeResume,
   getDecidedFingerprints,
   listInProgress,
+  listReviewSessions,
   recordDecision,
 } from "./reviewProgress";
 
@@ -65,11 +66,13 @@ describe.skipIf(!databaseUrl)("review progress round-trip (issue #29)", () => {
     const db = getDb();
     await db.delete(reviewProgress).where(eq(reviewProgress.owner, OWNER));
     await db.delete(decks).where(eq(decks.owner, OWNER));
+    await db.delete(prStatus).where(eq(prStatus.owner, OWNER));
   });
 
   beforeEach(async () => {
-    // Each test starts from a clean slate of decisions (decks persist across tests).
+    // Each test starts from a clean slate of decisions + PR status (decks persist).
     await getDb().delete(reviewProgress).where(eq(reviewProgress.owner, OWNER));
+    await getDb().delete(prStatus).where(eq(prStatus.owner, OWNER));
   });
 
   it("persists a decision on a swipe and reads it back (AC#1)", async () => {
@@ -137,6 +140,54 @@ describe.skipIf(!databaseUrl)("review progress round-trip (issue #29)", () => {
     await getDb()
       .delete(decks)
       .where(and(eq(decks.owner, OWNER), eq(decks.headSha, H2)));
+  });
+
+  it("moves a touched PR into the Done bucket once pr_status is merged (#31, AC#2/AC#3)", async () => {
+    // The full dashboard join end-to-end: the reviewer touched H1, and background sync
+    // recorded the PR as merged. listReviewSessions must load review_progress + decks +
+    // pr_status from real Postgres and route this session OUT of active and INTO archived.
+    await recordDecision(ref(H1), "a", "up");
+    await getDb()
+      .insert(prStatus)
+      .values({ owner: OWNER, repo: REPO, prNumber: PR, status: "merged", installationId: 99 });
+
+    const { active, archived } = await listReviewSessions(USER);
+
+    expect(active.find((r) => r.owner === OWNER && r.prNumber === PR)).toBeUndefined();
+    const done = archived.find((r) => r.owner === OWNER && r.prNumber === PR);
+    expect(done).toMatchObject({ headSha: H1, reviewed: 1, total: 3, status: "merged" });
+  });
+
+  it("keeps a touched PR in the active list while pr_status is still open (#31, AC#3)", async () => {
+    // The inverse: an explicit open pr_status row (or none) leaves the session active so
+    // the Done split only fires on a real terminal status, never spuriously.
+    await recordDecision(ref(H1), "a", "up");
+    await getDb()
+      .insert(prStatus)
+      .values({ owner: OWNER, repo: REPO, prNumber: PR, status: "open", installationId: 99 });
+
+    const { active, archived } = await listReviewSessions(USER);
+
+    expect(archived.find((r) => r.owner === OWNER && r.prNumber === PR)).toBeUndefined();
+    expect(active.find((r) => r.owner === OWNER && r.prNumber === PR)).toMatchObject({
+      headSha: H1,
+      reviewed: 1,
+      total: 3,
+    });
+  });
+
+  it("badges a closed-not-merged PR as closed in the Done bucket (#31)", async () => {
+    await recordDecision(ref(H1), "a", "up");
+    await getDb()
+      .insert(prStatus)
+      .values({ owner: OWNER, repo: REPO, prNumber: PR, status: "closed", installationId: 99 });
+
+    const { active, archived } = await listReviewSessions(USER);
+
+    expect(active.find((r) => r.owner === OWNER && r.prNumber === PR)).toBeUndefined();
+    expect(archived.find((r) => r.owner === OWNER && r.prNumber === PR)).toMatchObject({
+      status: "closed",
+    });
   });
 
   it("rejects a decision outside the up/down domain at the DB layer (CHECK constraint)", async () => {

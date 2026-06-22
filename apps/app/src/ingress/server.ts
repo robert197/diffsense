@@ -3,7 +3,7 @@ import { type ChunkReaction, ChunkReactionSchema, type Deck, type DeckRef } from
 import { Webhooks } from "@octokit/webhooks";
 import { Hono } from "hono";
 import { z } from "zod";
-import type { PrRef } from "../types.js";
+import type { PrRef, PrStatusUpdateJob } from "../types.js";
 
 const MAX_BODY_BYTES = 5_000_000;
 /** Deck requests carry only a handful of identifiers — cap the body tightly. */
@@ -28,6 +28,13 @@ const DeckQuerySchema = z.object({
 export interface IngressDeps {
   webhookSecret: string;
   enqueue: (ref: PrRef) => Promise<void>;
+  /**
+   * Enqueue a background PR merge-status write from a `closed`/`reopened` webhook
+   * (issue #31). Optional: when absent, those actions are silently acked (204) — a
+   * deployment without the status queue wired does not advertise a path it can't
+   * serve, exactly like `recordReaction`/`getDeck` below.
+   */
+  enqueueStatus?: (job: PrStatusUpdateJob) => Promise<void>;
   /**
    * Records a reviewer 👍/👎 on a flagged chunk (issue #3). Optional: when
    * absent, the `/reactions` route is inert (404) so a deployment that has not
@@ -74,6 +81,8 @@ interface PullRequestPayload {
   number?: number;
   repository?: { name?: string; owner?: { login?: string } };
   installation?: { id?: number };
+  // Present on `closed` (and other) actions: the live lifecycle we record (issue #31).
+  pull_request?: { merged?: boolean; state?: string };
 }
 
 /**
@@ -170,6 +179,7 @@ function renderConfirmPage(reaction: ChunkReaction): string {
 export function createServer({
   webhookSecret,
   enqueue,
+  enqueueStatus,
   recordReaction,
   getDeck,
   deckApiSecret,
@@ -335,7 +345,14 @@ export function createServer({
       return c.json({ error: "invalid JSON body" }, 400);
     }
     const action = payload.action;
-    if (action !== "opened" && action !== "synchronize") {
+    const isReview = action === "opened" || action === "synchronize";
+    const isLifecycle = action === "closed" || action === "reopened";
+    if (!isReview && !isLifecycle) {
+      return c.body(null, 204);
+    }
+    // A lifecycle event with no status queue wired is silently acked (the status
+    // feature is optional, like reactions/decks) — nothing to enqueue.
+    if (isLifecycle && !enqueueStatus) {
       return c.body(null, 204);
     }
 
@@ -349,10 +366,34 @@ export function createServer({
     }
 
     try {
-      await enqueue({ owner, repo, prNumber, installationId, action, deliveryId: id });
+      if (isReview) {
+        await enqueue({
+          owner,
+          repo,
+          prNumber,
+          installationId,
+          action: action as "opened" | "synchronize",
+          deliveryId: id,
+        });
+      } else {
+        // closed → record live merged/closed; reopened → back to open. The poll
+        // reconciles anything this webhook misses (issue #31, R1/R4).
+        const state = action === "closed" ? "closed" : "open";
+        const merged = action === "closed" ? payload.pull_request?.merged === true : false;
+        // biome-ignore lint/style/noNonNullAssertion: guarded by `isLifecycle && !enqueueStatus` above.
+        await enqueueStatus!({
+          owner,
+          repo,
+          prNumber,
+          installationId,
+          state,
+          merged,
+          deliveryId: id,
+        });
+      }
     } catch (err) {
       // Redis/queue unavailable — 503 so GitHub retries the delivery.
-      console.error("failed to enqueue review job:", err);
+      console.error("failed to enqueue job:", err);
       return c.json({ error: "queue unavailable" }, 503);
     }
     return c.json({ accepted: true }, 202);

@@ -4,8 +4,9 @@ import { createDrizzleReactionStore } from "./adapters/reactionStore.js";
 import { loadConfig } from "./config.js";
 import { createDb } from "./db/client.js";
 import { createServer } from "./ingress/server.js";
-import { createProducer } from "./queue/producer.js";
+import { createProducer, createStatusProducer } from "./queue/producer.js";
 import { startWorker } from "./worker/index.js";
+import { startStatusWorker } from "./worker/statusWorker.js";
 
 /**
  * Role dispatch — one image, three roles selected by argv/ROLE (KTD7).
@@ -35,12 +36,14 @@ const config = loadConfig();
 
 if (role === "serve") {
   const producer = createProducer(config.redisUrl);
+  const statusProducer = createStatusProducer(config.redisUrl);
   const { db, client } = createDb(config.databaseUrl);
   const reactionStore = createDrizzleReactionStore(db);
   const deckStore = createDrizzleDeckStore(db);
   const app = createServer({
     webhookSecret: config.githubWebhookSecret,
     enqueue: producer.enqueue,
+    enqueueStatus: statusProducer.enqueueStatus,
     recordReaction: reactionStore.record,
     getDeck: deckStore.get,
     deckApiSecret: config.deckApiSecret,
@@ -49,12 +52,25 @@ if (role === "serve") {
   console.log(`diffsense serve listening on :${config.port}`);
   onShutdown(async () => {
     await producer.close();
+    await statusProducer.close();
     await client.end();
   });
 } else if (role === "worker") {
   const worker = startWorker(config);
+  // Background PR merge-status sync (issue #31) runs inside the worker role: a second
+  // consumer for the status queue plus the repeatable poll that reconciles open PRs.
+  const statusWorker = startStatusWorker(config);
+  const statusProducer = createStatusProducer(config.redisUrl);
+  statusProducer
+    .scheduleStatusPoll({ everyMs: config.prStatusPollIntervalMs })
+    .then(() => console.log(`pr-status poll scheduled every ${config.prStatusPollIntervalMs}ms`))
+    .catch((err) => console.error("failed to schedule pr-status poll:", err));
   console.log("diffsense worker started");
-  onShutdown(() => worker.close());
+  onShutdown(async () => {
+    await worker.close();
+    await statusWorker.close();
+    await statusProducer.close();
+  });
 } else {
   console.error(`unknown role: ${role} (expected "serve" or "worker")`);
   process.exit(1);

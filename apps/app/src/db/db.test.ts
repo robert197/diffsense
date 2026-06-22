@@ -1,13 +1,14 @@
 import type { ChunkReview, Deck } from "@diffsense/core";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { createDrizzleConventionStore } from "../adapters/conventionStore.js";
 import { createDrizzleCostStore } from "../adapters/costStore.js";
 import { createDrizzleDeckStore } from "../adapters/deckStore.js";
 import { createDrizzleFingerprintCache } from "../adapters/fingerprintCache.js";
+import { createDrizzlePrStatusStore } from "../adapters/prStatusStore.js";
 import { createDrizzleReactionStore } from "../adapters/reactionStore.js";
 import { createDb } from "./client.js";
-import { costs, decks, processedEvents, reactions } from "./schema.js";
+import { costs, decks, prStatus, processedEvents, reactions } from "./schema.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 
@@ -153,5 +154,84 @@ describe.skipIf(!databaseUrl)("db round-trip (R6)", () => {
     // Exactly one row for the key — replaced, not stacked.
     const rows = await db.select().from(decks).where(eq(decks.headSha, ref.headSha));
     expect(rows).toHaveLength(1);
+  });
+
+  it("tracks one pr_status row per PR, upserting status in place (#31)", async () => {
+    const owner = `octo-${Date.now()}`;
+    const repo = `demo-${Math.round(Math.random() * 1e6)}`;
+    const prNumber = Math.round(Math.random() * 1e6);
+    const key = and(
+      eq(prStatus.owner, owner),
+      eq(prStatus.repo, repo),
+      eq(prStatus.prNumber, prNumber),
+    );
+
+    await db.insert(prStatus).values({ owner, repo, prNumber, status: "open", installationId: 99 });
+
+    let rows = await db.select().from(prStatus).where(key);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe("open");
+
+    // A second PR coordinate collides on UNIQUE(owner,repo,pr_number) → upsert in place.
+    await db
+      .insert(prStatus)
+      .values({ owner, repo, prNumber, status: "merged", installationId: 99 })
+      .onConflictDoUpdate({
+        target: [prStatus.owner, prStatus.repo, prStatus.prNumber],
+        set: { status: "merged", updatedAt: sql`now()` },
+      });
+
+    rows = await db.select().from(prStatus).where(key);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe("merged");
+  });
+
+  it("rejects a pr_status row outside the lifecycle domain (#31)", async () => {
+    const owner = `octo-${Date.now()}`;
+    const repo = `demo-${Math.round(Math.random() * 1e6)}`;
+    await expect(
+      db.insert(prStatus).values({ owner, repo, prNumber: 1, status: "bogus", installationId: 1 }),
+    ).rejects.toThrow();
+  });
+
+  it("seedOpen never resurrects a terminal pr_status — late synchronize is inert (#31)", async () => {
+    const store = createDrizzlePrStatusStore(db);
+    const owner = `octo-${Date.now()}`;
+    const repo = `demo-${Math.round(Math.random() * 1e6)}`;
+    const prNumber = Math.round(Math.random() * 1e6);
+    const key = and(
+      eq(prStatus.owner, owner),
+      eq(prStatus.repo, repo),
+      eq(prStatus.prNumber, prNumber),
+    );
+
+    // First review seeds the PR as open.
+    await store.seedOpen({ owner, repo, prNumber, installationId: 5 });
+    let rows = await db.select().from(prStatus).where(key);
+    expect(rows[0]?.status).toBe("open");
+
+    // The PR merges (webhook/poll records the terminal status).
+    await store.recordStatus({ owner, repo, prNumber, installationId: 5, status: "merged" });
+
+    // A late `synchronize` re-seeds — the setWhere guard must NOT reset it to open.
+    await store.seedOpen({ owner, repo, prNumber, installationId: 9 });
+    rows = await db.select().from(prStatus).where(key);
+    expect(rows[0]?.status).toBe("merged");
+    // The guarded update did not fire, so installation_id stays the merged-time value.
+    expect(rows[0]?.installationId).toBe(5);
+  });
+
+  it("listOpenForPoll returns only open PRs, oldest-synced first (#31)", async () => {
+    const store = createDrizzlePrStatusStore(db);
+    const owner = `octo-poll-${Date.now()}`;
+    const repo = `demo-${Math.round(Math.random() * 1e6)}`;
+    // Two open PRs + one merged; the merged one must not appear in the poll batch.
+    await store.recordStatus({ owner, repo, prNumber: 1, installationId: 5, status: "open" });
+    await store.recordStatus({ owner, repo, prNumber: 2, installationId: 5, status: "merged" });
+    await store.recordStatus({ owner, repo, prNumber: 3, installationId: 5, status: "open" });
+
+    const open = (await store.listOpenForPoll(100)).filter((r) => r.owner === owner);
+    expect(open.every((r) => r.status === "open")).toBe(true);
+    expect(open.map((r) => r.prNumber).sort()).toEqual([1, 3]);
   });
 });

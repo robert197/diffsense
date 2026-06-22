@@ -33,6 +33,7 @@ vi.mock("./db", () => ({
     updatedAt: "updated_at",
   },
   decks: {},
+  prStatus: {},
   getDb: () => ({
     insert: () => ({
       values: (values: Record<string, unknown>) => ({
@@ -47,12 +48,14 @@ vi.mock("./db", () => ({
 }));
 
 import {
+  type PrStatusRow,
   type ProgressDeckRow,
   type ProgressRow,
   computeResume,
   getDecidedFingerprints,
   recordDecision,
   summarizeInProgress,
+  summarizeSessions,
 } from "./reviewProgress";
 
 const ref = { githubUserId: 42, owner: "acme", repo: "web", prNumber: 7, headSha: "h1" };
@@ -233,6 +236,89 @@ describe("summarizeInProgress", () => {
       [deckRow("h1", deck3, 1000, 1), otherDeck],
     );
     expect(reviews.map((r) => r.prNumber)).toEqual([8, 7]);
+  });
+});
+
+describe("summarizeSessions (active vs. done, #31)", () => {
+  const deck3 = [card("a"), card("b"), card("c")];
+  const status = (s: string): PrStatusRow => ({
+    owner: "acme",
+    repo: "web",
+    prNumber: 7,
+    status: s,
+  });
+
+  it("keeps an open PR's in-progress review in the active bucket", () => {
+    const { active, archived } = summarizeSessions(
+      [progressRow("h1", "a", 2000)],
+      [deckRow("h1", deck3, 1000, 1)],
+      [status("open")],
+    );
+    expect(archived).toEqual([]);
+    expect(active).toHaveLength(1);
+    expect(active[0]).toMatchObject({ prNumber: 7, reviewed: 1, total: 3 });
+  });
+
+  it("treats a PR with no status row as open (backward-compatible)", () => {
+    const { active, archived } = summarizeSessions(
+      [progressRow("h1", "a", 2000)],
+      [deckRow("h1", deck3, 1000, 1)],
+      [],
+    );
+    expect(archived).toEqual([]);
+    expect(active).toHaveLength(1);
+  });
+
+  it("moves a merged PR's session to archived with a merged badge", () => {
+    const { active, archived } = summarizeSessions(
+      [progressRow("h1", "a", 2000)],
+      [deckRow("h1", deck3, 1000, 1)],
+      [status("merged")],
+    );
+    expect(active).toEqual([]);
+    expect(archived).toHaveLength(1);
+    expect(archived[0]).toMatchObject({ prNumber: 7, reviewed: 1, total: 3, status: "merged" });
+  });
+
+  it("archives a merged PR even when the deck was fully reviewed", () => {
+    const { active, archived } = summarizeSessions(
+      [progressRow("h1", "a", 2000), progressRow("h1", "b", 2001), progressRow("h1", "c", 2002)],
+      [deckRow("h1", deck3, 1000, 1)],
+      [status("merged")],
+    );
+    expect(active).toEqual([]);
+    expect(archived).toHaveLength(1);
+    expect(archived[0]).toMatchObject({ reviewed: 3, total: 3, status: "merged" });
+  });
+
+  it("badges a closed-not-merged PR as closed", () => {
+    const { archived } = summarizeSessions(
+      [progressRow("h1", "a", 2000)],
+      [deckRow("h1", deck3, 1000, 1)],
+      [status("closed")],
+    );
+    expect(archived[0]).toMatchObject({ status: "closed" });
+  });
+
+  it("excludes a merged PR the reviewer never touched (reviewed === 0)", () => {
+    const { active, archived } = summarizeSessions(
+      [progressRow("h1", "ghost", 2000)],
+      [deckRow("h1", deck3, 1000, 1)],
+      [status("merged")],
+    );
+    expect(active).toEqual([]);
+    expect(archived).toEqual([]);
+  });
+
+  it("collapses a merged PR touched across two heads into one archived row", () => {
+    const { archived } = summarizeSessions(
+      [progressRow("h1", "a", 2000), progressRow("h2", "x", 8000)],
+      [deckRow("h1", deck3, 1000, 1), deckRow("h2", [card("x"), card("y")], 5000, 2)],
+      [status("merged")],
+    );
+    expect(archived).toHaveLength(1);
+    // The newest-activity head wins the single row.
+    expect(archived[0]).toMatchObject({ headSha: "h2" });
   });
 });
 
