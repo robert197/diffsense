@@ -14,11 +14,30 @@ const h = vi.hoisted(() => ({
   // setLanguage writes a cookie and revalidates the deck route; capture both.
   cookieSets: [] as Array<{ name: string; value: string; options: Record<string, unknown> }>,
   revalidated: [] as string[],
+  // postCardComment (issue #30): the latest deck it reads, the gateway post, the persist.
+  deck: null as unknown,
+  deckReject: null as Error | null,
+  postCalls: [] as unknown[][],
+  postResult: {
+    id: 101,
+    htmlUrl: "https://github.com/acme/web/pull/7#c101",
+    kind: "review",
+  } as unknown,
+  postReject: null as Error | null,
+  postedCalls: [] as unknown[][],
+  postedReject: null as Error | null,
 }));
 vi.mock("../../../../../../lib/deck", () => ({
   recordSwipe: (...args: unknown[]) => {
     h.calls.push(args);
     return h.reactionReject ? Promise.reject(h.reactionReject) : Promise.resolve();
+  },
+  getLatestDeck: () => (h.deckReject ? Promise.reject(h.deckReject) : Promise.resolve(h.deck)),
+}));
+vi.mock("../../../../../../lib/prComments", () => ({
+  recordPostedComment: (...args: unknown[]) => {
+    h.postedCalls.push(args);
+    return h.postedReject ? Promise.reject(h.postedReject) : Promise.resolve();
   },
 }));
 vi.mock("../../../../../../lib/reviewProgress", () => ({
@@ -44,7 +63,13 @@ vi.mock("next/cache", () => ({
   },
 }));
 
-import { recordSwipe, setLanguage } from "./actions";
+import type { Card, Deck } from "@diffsense/core";
+import {
+  GitHubAuthError,
+  GitHubPermissionError,
+  GitHubRateLimitError,
+} from "../../../../../../lib/github";
+import { postCardComment, recordSwipe, setLanguage } from "./actions";
 
 function form(entries: Record<string, string>): FormData {
   const f = new FormData();
@@ -219,5 +244,159 @@ describe("setLanguage action", () => {
     expect(h.cookieSets).toHaveLength(1);
     expect(h.cookieSets[0]?.value).toBe("fr");
     expect(h.revalidated).toHaveLength(0);
+  });
+});
+
+describe("postCardComment action (issue #30)", () => {
+  function card(over: Partial<Card> = {}): Card {
+    return {
+      fingerprint: "fp-a",
+      file: "src/a.ts",
+      tier: "High",
+      rank: 0,
+      riskScore: 1,
+      highlights: [{ side: "R", start: 12, end: 18 }],
+      suggestions: [],
+      explanation: "adds a guard",
+      ...over,
+    };
+  }
+  function deck(cards: Card[] = [card()]): Deck {
+    return { owner: "acme", repo: "web", prNumber: 7, headSha: "h1", cards };
+  }
+  const valid = {
+    owner: "acme",
+    repo: "web",
+    prNumber: "7",
+    fingerprint: "fp-a",
+    body: "Looks off.",
+  };
+
+  // A signed-in reviewer whose OAuth client posts through the GitHubGateway port.
+  function signedIn() {
+    h.session.current = {
+      userId: 42,
+      login: "octocat",
+      github: {
+        postComment: (...args: unknown[]) => {
+          h.postCalls.push(args);
+          return h.postReject ? Promise.reject(h.postReject) : Promise.resolve(h.postResult);
+        },
+      },
+    };
+  }
+
+  beforeEach(() => {
+    h.postCalls.length = 0;
+    h.postedCalls.length = 0;
+    h.revalidated.length = 0;
+    h.deck = deck();
+    h.deckReject = null;
+    h.postReject = null;
+    h.postedReject = null;
+    h.postResult = { id: 101, htmlUrl: "https://github.com/acme/web/pull/7#c101", kind: "review" };
+    signedIn();
+  });
+
+  it("posts an anchored comment, persists it, and returns the link (happy path)", async () => {
+    const res = await postCardComment({ ok: false }, form(valid));
+
+    expect(res.ok).toBe(true);
+    expect(res.comment).toEqual({
+      htmlUrl: "https://github.com/acme/web/pull/7#c101",
+      kind: "review",
+    });
+    // The gateway was called with the anchor derived from the card's right-side highlight.
+    expect(h.postCalls).toHaveLength(1);
+    const [ref, input] = h.postCalls[0] as [unknown, { body: string; anchor?: unknown }];
+    expect(ref).toEqual({ owner: "acme", repo: "web", prNumber: 7 });
+    expect(input.body).toBe("Looks off.");
+    expect(input.anchor).toEqual({
+      file: "src/a.ts",
+      line: 18,
+      startLine: 12,
+      side: "RIGHT",
+      commitId: "h1",
+    });
+    // It was recorded for reflection, keyed by reviewer + deck head.
+    expect(h.postedCalls).toHaveLength(1);
+    const [cref, entry] = h.postedCalls[0] as [unknown, { githubCommentId: number; kind: string }];
+    expect(cref).toEqual({
+      githubUserId: 42,
+      owner: "acme",
+      repo: "web",
+      prNumber: 7,
+      headSha: "h1",
+    });
+    expect(entry.githubCommentId).toBe(101);
+    // No server-driven refresh: the composer shows the link inline (like recordSwipe,
+    // which also never revalidates so a refresh can't fight the client deck state).
+    expect(h.revalidated).not.toContain("/pr/acme/web/7/deck");
+  });
+
+  it("posts an unanchored conversation comment for a deletion-only card", async () => {
+    h.deck = deck([card({ highlights: [{ side: "L", start: 4, end: 6 }] })]);
+    h.postResult = { id: 202, htmlUrl: "https://github.com/acme/web/pull/7#i202", kind: "issue" };
+
+    const res = await postCardComment({ ok: false }, form(valid));
+
+    expect(res.ok).toBe(true);
+    const [, input] = h.postCalls[0] as [unknown, { anchor?: unknown }];
+    expect(input.anchor).toBeUndefined();
+  });
+
+  it("returns an error and never posts when there is no session", async () => {
+    h.session.current = null;
+    const res = await postCardComment({ ok: false }, form(valid));
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/sign in/i);
+    expect(h.postCalls).toHaveLength(0);
+  });
+
+  it("rejects an empty/whitespace body without posting", async () => {
+    const res = await postCardComment({ ok: false }, form({ ...valid, body: "   " }));
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/write a comment/i);
+    expect(h.postCalls).toHaveLength(0);
+  });
+
+  it("errors when the fingerprint matches no card in the current deck", async () => {
+    const res = await postCardComment({ ok: false }, form({ ...valid, fingerprint: "missing" }));
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/no longer part/i);
+    expect(h.postCalls).toHaveLength(0);
+  });
+
+  it("surfaces a permission denial clearly", async () => {
+    h.postReject = new GitHubPermissionError();
+    const res = await postCardComment({ ok: false }, form(valid));
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/permission/i);
+    expect(h.postedCalls).toHaveLength(0);
+  });
+
+  it("surfaces a rate limit clearly", async () => {
+    h.postReject = new GitHubRateLimitError();
+    const res = await postCardComment({ ok: false }, form(valid));
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/rate limit/i);
+  });
+
+  it("surfaces an expired session clearly", async () => {
+    h.postReject = new GitHubAuthError();
+    const res = await postCardComment({ ok: false }, form(valid));
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/session expired/i);
+  });
+
+  it("still reports success when persistence fails after a successful post", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    h.postedReject = new Error("db down");
+    const res = await postCardComment({ ok: false }, form(valid));
+    // The comment is already on GitHub — a record failure must not look like a post failure.
+    expect(res.ok).toBe(true);
+    expect(res.comment?.htmlUrl).toBe("https://github.com/acme/web/pull/7#c101");
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
   });
 });

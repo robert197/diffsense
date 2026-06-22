@@ -184,7 +184,53 @@ export const reviewProgress = pgTable(
   }),
 );
 
-const schema = { findings, decks, reactions, webSessions, cardLocalizations, reviewProgress };
+/**
+ * PR comments a reviewer posts from a deck card (issue #30). Mirrors the
+ * `pr_comments` table declared in `apps/app/src/db/schema.ts` (migration
+ * `0010_pr_comments`) — lockstep, no shared schema package yet. `apps/web` is the
+ * only reader/writer: the comment action records the posted comment on success, and
+ * the deck page reads a reviewer's comments back to reflect them on the card. Keyed
+ * per reviewer (`github_user_id`) + deck (PR + head SHA), with the GitHub comment id
+ * unique so an at-least-once retry is idempotent.
+ */
+export const prComments = pgTable(
+  "pr_comments",
+  {
+    id: serial("id").primaryKey(),
+    githubUserId: integer("github_user_id").notNull(),
+    owner: text("owner").notNull(),
+    repo: text("repo").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    headSha: text("head_sha").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    body: text("body").notNull(),
+    githubCommentId: integer("github_comment_id").notNull(),
+    htmlUrl: text("html_url").notNull(),
+    kind: text("kind").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    commentUnique: unique("pr_comments_github_comment_id_unique").on(table.githubCommentId),
+    reviewerIdx: index("pr_comments_reviewer_idx").on(
+      table.githubUserId,
+      table.owner,
+      table.repo,
+      table.prNumber,
+      table.headSha,
+    ),
+    kindCheck: check("pr_comments_kind_check", sql`${table.kind} in ('review', 'issue')`),
+  }),
+);
+
+const schema = {
+  findings,
+  decks,
+  reactions,
+  webSessions,
+  cardLocalizations,
+  reviewProgress,
+  prComments,
+};
 
 let cached: ReturnType<typeof drizzle<typeof schema>> | null = null;
 

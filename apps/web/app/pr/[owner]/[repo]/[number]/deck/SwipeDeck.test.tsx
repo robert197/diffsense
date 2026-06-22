@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CardView } from "../../../../../../lib/codeWindow";
-import { SwipeDeck } from "./SwipeDeck";
+import { type PostCommentResult, SwipeDeck } from "./SwipeDeck";
 
 /**
  * End-to-end behavioural coverage for the swipe deck (issue #27). These exercise
@@ -30,6 +30,8 @@ function cardView(over: Partial<CardView> = {}): CardView {
     ],
     removedLines: 0,
     highlightLabel: "Added lines 10–11",
+    commentAnchored: true,
+    postedComments: [],
     ...over,
   };
 }
@@ -65,8 +67,13 @@ function firePointer(node: Element, type: string, clientX: number) {
 function renderDeck(
   cards: CardView[],
   recordSwipe = vi.fn(async () => {}),
-  extra: { initialIndex?: number; initialCounts?: { up: number; down: number } } = {},
+  extra: {
+    initialIndex?: number;
+    initialCounts?: { up: number; down: number };
+    postComment?: (prev: PostCommentResult, fd: FormData) => Promise<PostCommentResult>;
+  } = {},
 ) {
+  const { postComment = vi.fn(async () => ({ ok: true })), ...rest } = extra;
   render(
     <SwipeDeck
       cards={cards}
@@ -75,7 +82,8 @@ function renderDeck(
       prNumber={7}
       headSha="h1"
       recordSwipe={recordSwipe}
-      {...extra}
+      postComment={postComment}
+      {...rest}
     />,
   );
   return recordSwipe;
@@ -346,6 +354,106 @@ describe("SwipeDeck — motion is present but never blocking (AC#6)", () => {
     expect(screen.getByText("src/b.ts")).toBeTruthy();
     expect(screen.queryByText("src/c.ts")).toBeNull();
     expect(screen.getByText("1 / 3 reviewed")).toBeTruthy();
+  });
+});
+
+describe("SwipeDeck — comment composer (issue #30)", () => {
+  it("keeps the composer collapsed until the reviewer opens it (low-noise)", () => {
+    renderDeck([cardView()]);
+    // Nothing posts on its own — the affordance is a button, not an open form.
+    expect(screen.getByText(/Comment on PR/)).toBeTruthy();
+    expect(screen.queryByPlaceholderText(/Leave a comment/)).toBeNull();
+  });
+
+  it("reveals the textarea and the anchored target on open", () => {
+    renderDeck([cardView({ file: "src/auth.ts", highlightLabel: "Added lines 10–11" })]);
+    act(() => {
+      fireEvent.click(screen.getByText(/Comment on PR/));
+    });
+    expect(screen.getByPlaceholderText(/Leave a comment/)).toBeTruthy();
+    expect(screen.getByText(/Posts a review comment on src\/auth\.ts/)).toBeTruthy();
+  });
+
+  it("shows the conversation target for a card with no anchor", () => {
+    renderDeck([cardView({ commentAnchored: false })]);
+    act(() => {
+      fireEvent.click(screen.getByText(/Comment on PR/));
+    });
+    expect(screen.getByText(/Posts a comment to the PR conversation/)).toBeTruthy();
+  });
+
+  it("posts the reviewer's comment through the action and shows the resulting link", async () => {
+    const postComment = vi.fn(async () => ({
+      ok: true as const,
+      comment: { htmlUrl: "https://github.com/acme/web/pull/7#c1", kind: "review" as const },
+    }));
+    renderDeck(
+      [cardView()],
+      vi.fn(async () => {}),
+      { postComment },
+    );
+
+    act(() => {
+      fireEvent.click(screen.getByText(/Comment on PR/));
+    });
+    const textarea = screen.getByPlaceholderText(/Leave a comment/);
+    fireEvent.change(textarea, { target: { value: "This looks off." } });
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Post comment/));
+    });
+
+    expect(postComment).toHaveBeenCalledTimes(1);
+    const fd = postComment.mock.calls[0][1] as FormData;
+    expect(fd.get("body")).toBe("This looks off.");
+    expect(fd.get("fingerprint")).toBe("fp-0");
+    expect(fd.get("owner")).toBe("acme");
+    expect(screen.getByText(/Posted to GitHub/)).toBeTruthy();
+    expect((screen.getByText(/View comment/) as HTMLAnchorElement).getAttribute("href")).toBe(
+      "https://github.com/acme/web/pull/7#c1",
+    );
+  });
+
+  it("surfaces a failure message and does not claim success", async () => {
+    const postComment = vi.fn(async () => ({
+      ok: false as const,
+      error: "You don't have permission to comment on this PR.",
+    }));
+    renderDeck(
+      [cardView()],
+      vi.fn(async () => {}),
+      { postComment },
+    );
+
+    act(() => {
+      fireEvent.click(screen.getByText(/Comment on PR/));
+    });
+    fireEvent.change(screen.getByPlaceholderText(/Leave a comment/), {
+      target: { value: "x" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Post comment/));
+    });
+
+    expect(screen.getByRole("alert").textContent).toMatch(/permission/i);
+    expect(screen.queryByText(/Posted to GitHub/)).toBeNull();
+  });
+
+  it("reflects comments already posted from this card with a link", () => {
+    renderDeck([
+      cardView({
+        postedComments: [
+          {
+            fingerprint: "fp-0",
+            body: "Earlier note",
+            htmlUrl: "https://github.com/acme/web/pull/7#c9",
+            kind: "review",
+            createdAt: new Date("2026-06-21T10:00:00Z"),
+          },
+        ],
+      }),
+    ]);
+    const link = screen.getByText("Earlier note") as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("https://github.com/acme/web/pull/7#c9");
   });
 });
 

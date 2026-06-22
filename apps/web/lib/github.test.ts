@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { GitHubAuthError, GitHubRateLimitError, createGitHubClient } from "./github";
+import {
+  GitHubAuthError,
+  GitHubPermissionError,
+  GitHubRateLimitError,
+  createGitHubClient,
+} from "./github";
 
 function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -261,6 +266,118 @@ describe("getFileAtRef", () => {
     const fetchImpl = vi.fn(async () => textResponse(`PNG${String.fromCharCode(0)}binary`));
     const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
     expect(await client.getFileAtRef("acme", "web", "logo.png", "sha")).toBeNull();
+  });
+});
+
+describe("postComment", () => {
+  const ref = { owner: "acme", repo: "web", prNumber: 7 };
+  const anchor = {
+    file: "src/a.ts",
+    line: 18,
+    startLine: 12,
+    side: "RIGHT" as const,
+    commitId: "sha1",
+  };
+
+  function created(id: number, url: string): Response {
+    return jsonResponse({ id, html_url: url }, 201);
+  }
+
+  it("posts an anchored review comment to pulls/{n}/comments with the diff fields", async () => {
+    const fetchImpl = vi.fn(async () =>
+      created(101, "https://github.com/acme/web/pull/7#discussion_r101"),
+    );
+    const client = createGitHubClient("gho_tok", fetchImpl as unknown as typeof fetch);
+
+    const posted = await client.postComment(ref, { body: "Looks off here.", anchor });
+
+    expect(posted).toEqual({
+      id: 101,
+      htmlUrl: "https://github.com/acme/web/pull/7#discussion_r101",
+      kind: "review",
+    });
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(String(url)).toContain("/repos/acme/web/pulls/7/comments");
+    expect((init as RequestInit).method).toBe("POST");
+    const sent = JSON.parse(String((init as RequestInit).body));
+    expect(sent).toMatchObject({
+      body: "Looks off here.",
+      commit_id: "sha1",
+      path: "src/a.ts",
+      line: 18,
+      side: "RIGHT",
+      start_line: 12,
+      start_side: "RIGHT",
+    });
+    const headers = (init as RequestInit).headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer gho_tok");
+  });
+
+  it("posts an unanchored comment to issues/{n}/comments", async () => {
+    const fetchImpl = vi.fn(async () =>
+      created(202, "https://github.com/acme/web/pull/7#issuecomment-202"),
+    );
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+
+    const posted = await client.postComment(ref, { body: "General note." });
+
+    expect(posted.kind).toBe("issue");
+    expect(posted.id).toBe(202);
+    expect(String(fetchImpl.mock.calls[0][0])).toContain("/repos/acme/web/issues/7/comments");
+    expect(JSON.parse(String((fetchImpl.mock.calls[0][1] as RequestInit).body))).toEqual({
+      body: "General note.",
+    });
+  });
+
+  it("falls back to a conversation comment when the anchored post 422s (line not in diff)", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ message: "line must be part of the diff" }, 422))
+      .mockResolvedValueOnce(created(303, "https://github.com/acme/web/pull/7#issuecomment-303"));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+
+    const posted = await client.postComment(ref, { body: "Off here.", anchor });
+
+    expect(posted.kind).toBe("issue");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    // First call attempted the review comment, second fell back to the issue comment.
+    expect(String(fetchImpl.mock.calls[0][0])).toContain("/pulls/7/comments");
+    expect(String(fetchImpl.mock.calls[1][0])).toContain("/issues/7/comments");
+    // The fallback body references the file/line it was meant to anchor to.
+    const fallback = JSON.parse(String((fetchImpl.mock.calls[1][1] as RequestInit).body)).body;
+    expect(fallback).toContain("Re: `src/a.ts`");
+    expect(fallback).toContain("lines 12–18");
+    expect(fallback).toContain("Off here.");
+  });
+
+  it("throws GitHubPermissionError on a plain 403 (write access denied)", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ message: "Resource not accessible" }, 403));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    await expect(client.postComment(ref, { body: "x" })).rejects.toBeInstanceOf(
+      GitHubPermissionError,
+    );
+  });
+
+  it("throws GitHubRateLimitError on a rate-limited 403", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ message: "API rate limit exceeded" }, 403, { "x-ratelimit-remaining": "0" }),
+    );
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    await expect(client.postComment(ref, { body: "x" })).rejects.toBeInstanceOf(
+      GitHubRateLimitError,
+    );
+  });
+
+  it("throws GitHubAuthError on 401", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ message: "Bad credentials" }, 401));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    await expect(client.postComment(ref, { body: "x" })).rejects.toBeInstanceOf(GitHubAuthError);
+  });
+
+  it("throws a generic error on a 500 from the review-comment endpoint", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ message: "boom" }, 500));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    await expect(client.postComment(ref, { body: "x", anchor })).rejects.toThrow(/500/);
   });
 });
 

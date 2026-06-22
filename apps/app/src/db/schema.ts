@@ -271,6 +271,54 @@ export const reviewProgress = pgTable(
 );
 
 /**
+ * PR comments a reviewer posts from a deck card (issue #30). One row per posted
+ * GitHub comment, attributed to the reviewer who sent it, so the card/session can
+ * reflect what was already posted on a reload — the same per-reviewer read-model
+ * split `review_progress` uses. The comment is posted through the `GitHubGateway`
+ * port; this table records the outcome (GitHub's comment id + URL + kind). Keyed
+ * for the deck-page read by `(github_user_id, owner, repo, pr_number, head_sha)`,
+ * with the GitHub comment id unique so a retry can't store a duplicate row.
+ * Canonical schema + migration live here; `apps/web` (the only reader/writer, via
+ * its `lib/db.ts` mirror) records on post and reads back to reflect on the card.
+ */
+export const prComments = pgTable(
+  "pr_comments",
+  {
+    id: serial("id").primaryKey(),
+    githubUserId: integer("github_user_id").notNull(),
+    owner: text("owner").notNull(),
+    repo: text("repo").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    headSha: text("head_sha").notNull(),
+    /** The card the comment was left from — empty for an unanchored conversation comment. */
+    fingerprint: text("fingerprint").notNull(),
+    /** The reviewer's posted text. */
+    body: text("body").notNull(),
+    /** GitHub's comment id — unique so an at-least-once retry is idempotent. */
+    githubCommentId: integer("github_comment_id").notNull(),
+    /** The posted comment's html URL, shown back on the card as a link. */
+    htmlUrl: text("html_url").notNull(),
+    /** "review" = diff-anchored, "issue" = general conversation (the fallback). */
+    kind: text("kind").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    // One row per GitHub comment — the idempotency key for an at-least-once post.
+    commentUnique: unique("pr_comments_github_comment_id_unique").on(table.githubCommentId),
+    // The deck-page reflect read: one reviewer's comments on one deck (PR + head).
+    reviewerIdx: index("pr_comments_reviewer_idx").on(
+      table.githubUserId,
+      table.owner,
+      table.repo,
+      table.prNumber,
+      table.headSha,
+    ),
+    // The comment kind is a closed domain; enforce it at the DB like the swipe sentiment.
+    kindCheck: check("pr_comments_kind_check", sql`${table.kind} in ('review', 'issue')`),
+  }),
+);
+
+/**
  * Per-PR inference cost (issue #12, docs/ARCHITECTURE.md §2) — product
  * observability. One append-only row per review run records the summed token
  * usage, the USD cost (token usage × per-model rate), and whether the run crossed

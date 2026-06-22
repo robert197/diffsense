@@ -1,4 +1,5 @@
 import type { Card, HighlightRange } from "@diffsense/core";
+import type { PostedCardComment } from "./prComments";
 
 /**
  * Pure render helpers for the swipe deck (issue #27). All branching logic the
@@ -36,6 +37,15 @@ export interface CardView {
   removedLines: number;
   /** Human label of the lines to scrutinize, e.g. "Added lines 12–18". */
   highlightLabel: string;
+  /**
+   * Whether a comment left from this card anchors to the diff (issue #30). True when
+   * the card points at added (right-side) lines — the comment lands as a diff-anchored
+   * review comment; false (deletion-only / no-op) → a general PR-conversation comment.
+   * Mirrors `cardCommentAnchor`'s rule so the composer can show the right target.
+   */
+  commentAnchored: boolean;
+  /** Comments the reviewer already posted from this card, reflected back (issue #30). */
+  postedComments: PostedCardComment[];
 }
 
 const DEFAULT_CONTEXT = 3;
@@ -139,7 +149,11 @@ export function highlightLabel(highlights: HighlightRange[]): string {
  * descriptive label + deletion note. Keeps the server page thin and this mapping
  * unit-testable.
  */
-export function toCardView(card: Card, fileText: string | null): CardView {
+export function toCardView(
+  card: Card,
+  fileText: string | null,
+  postedComments: PostedCardComment[] = [],
+): CardView {
   const code = fileText !== null ? buildCodeWindow(fileText.split("\n"), card.highlights) : null;
   return {
     fingerprint: card.fingerprint,
@@ -151,6 +165,10 @@ export function toCardView(card: Card, fileText: string | null): CardView {
     code,
     removedLines: deletionSummary(card.highlights),
     highlightLabel: highlightLabel(card.highlights),
+    // A comment anchors iff the card points at added (right-side) lines — the same
+    // rule `cardCommentAnchor` uses to decide review-comment vs conversation-comment.
+    commentAnchored: card.highlights.some((h) => h.side === "R"),
+    postedComments,
   };
 }
 

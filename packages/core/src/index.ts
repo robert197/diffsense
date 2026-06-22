@@ -6,6 +6,7 @@ export type { CostStore, PrCostRecord } from "./ports/costStore.js";
 export type { DeckRef, DeckStore } from "./ports/deckStore.js";
 export type { FingerprintCache } from "./ports/fingerprintCache.js";
 export type { FindingPrRef, FindingStore } from "./ports/findingStore.js";
+export type { GitHubGateway, GitHubPrRef } from "./ports/githubGateway.js";
 export type {
   LLMProvider,
   LocalizeRequest,
@@ -37,6 +38,7 @@ export {
   recordCost,
 } from "./cost/recordCost.js";
 export { type CardViewPr, cardViewLink } from "./render/cardViewLink.js";
+export { cardCommentAnchor } from "./render/commentAnchor.js";
 export {
   type ReactionOptions,
   type ReactionTier,
@@ -123,6 +125,14 @@ export {
   PrUsageSchema,
 } from "./schemas/cost.js";
 export { type ChunkReaction, ChunkReactionSchema } from "./schemas/reaction.js";
+export {
+  type PostedComment,
+  PostedCommentSchema,
+  type PrCommentAnchor,
+  PrCommentAnchorSchema,
+  type PrCommentInput,
+  PrCommentInputSchema,
+} from "./schemas/prComment.js";
 export {
   type ScopeCreepReport,
   ScopeCreepReportSchema,
