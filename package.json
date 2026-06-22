@@ -13,6 +13,7 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "typecheck": "pnpm -r --if-present typecheck",
+    "diffsense": "pnpm -C apps/app cli",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx apps/app/src/db/migrate.ts"
   },
