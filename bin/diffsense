@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# diffsense CLI wrapper (issue #32). Runs the agent-facing review CLI via tsx
+# from the apps/app workspace, so @diffsense/* resolve through the workspace
+# symlinks regardless of the caller's cwd. No build step — matches the repo's
+# tsx-everywhere convention (docs/STACK.md).
+#
+#   bin/diffsense review <owner/repo#123> [--installation-id <n>]
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec pnpm --dir "$ROOT/apps/app" exec tsx src/cli/main.ts "$@"

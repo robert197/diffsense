@@ -6,6 +6,7 @@
   "scripts": {
     "serve": "tsx src/main.ts serve",
     "worker": "tsx src/main.ts worker",
+    "cli": "tsx src/cli/main.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
