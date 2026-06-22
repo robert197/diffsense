@@ -1,4 +1,10 @@
-import type { PrLifecycle, PrStatusPollRow, PrStatusReader, PrStatusStore } from "@diffsense/core";
+import type {
+  GitHubPrRef,
+  PrLifecycle,
+  PrStatusPollRow,
+  PrStatusReader,
+  PrStatusStore,
+} from "@diffsense/core";
 import { describe, expect, it, vi } from "vitest";
 import type { PrStatusUpdateJob } from "../types.js";
 import { handleStatusUpdate, runStatusPoll } from "./statusWorker.js";
@@ -164,7 +170,7 @@ describe("runStatusPoll (#31)", () => {
 
     const out = await runStatusPoll({ store, readerFor, batch: 50 });
 
-    // PR 1 threw (left for next tick); PR 2 still reconciled to merged.
+    // PR 1 threw; PR 2 still reconciled to merged.
     expect(out).toEqual({ checked: 2, changed: 1 });
     expect(store.recordStatus).toHaveBeenCalledWith({
       owner: "octo",
@@ -173,5 +179,78 @@ describe("runStatusPoll (#31)", () => {
       installationId: 12,
       status: "merged",
     });
+  });
+
+  it("advances synced_at for a PR whose live read fails, so it rotates instead of pinning the head (R4/R5)", async () => {
+    // The batch is the oldest-synced open PRs; a read failure that does NOT bump synced_at
+    // would re-anchor the batch head every tick and starve healthy PRs behind it. Assert
+    // the failed read still rotates (synced_at bumped), alongside the unchanged one.
+    const store = fakeStore([row({ prNumber: 1 }), row({ prNumber: 2 })]);
+    const failing: PrStatusReader = {
+      getPullRequestState: vi.fn(async ({ prNumber }): Promise<PrLifecycle | null> => {
+        if (prNumber === 1) {
+          throw new Error("GitHub 502");
+        }
+        return { state: "open", merged: false };
+      }),
+    };
+    const readerFor = vi.fn(async () => failing);
+
+    const out = await runStatusPoll({ store, readerFor, batch: 50 });
+
+    expect(out).toEqual({ checked: 2, changed: 0 });
+    expect(store.recordStatus).not.toHaveBeenCalled();
+    const synced = store.markSynced.mock.calls[0]?.[0] as GitHubPrRef[];
+    expect(synced.map((r) => r.prNumber).sort()).toEqual([1, 2]);
+  });
+
+  it("rotates an entire unreadable installation's rows and still processes other installations (R4/R5)", async () => {
+    // Installation 12 can't mint a reader (suspended/uninstalled); installation 13 is fine.
+    // The dead installation's rows must still advance synced_at so they can't permanently
+    // occupy the batch head — the whole point of the bounded oldest-synced rotation.
+    const store = fakeStore([
+      row({ prNumber: 1, installationId: 12 }),
+      row({ prNumber: 2, installationId: 13 }),
+    ]);
+    const readerFor = vi.fn(async (installationId: number) => {
+      if (installationId === 12) {
+        throw new Error("installation suspended");
+      }
+      return reader({ "octo/demo#2": { state: "open", merged: false } });
+    });
+
+    const out = await runStatusPoll({ store, readerFor, batch: 50 });
+
+    // Only the healthy installation's PR was actually read.
+    expect(out).toEqual({ checked: 1, changed: 0 });
+    expect(store.recordStatus).not.toHaveBeenCalled();
+    // ...but both rows advance synced_at so the dead installation can't pin the head.
+    const synced = store.markSynced.mock.calls[0]?.[0] as GitHubPrRef[];
+    expect(synced.map((r) => r.prNumber).sort()).toEqual([1, 2]);
+  });
+
+  it("leaves synced_at untouched when a changed PR's status write fails, so the next tick retries it", async () => {
+    // A genuine change whose recordStatus write fails has pending work — unlike a read
+    // failure, it should be retried promptly (not rotated to the back of the batch).
+    const store = fakeStore([row({ prNumber: 1 }), row({ prNumber: 2 })]);
+    store.recordStatus.mockImplementation(async ({ prNumber }: { prNumber: number }) => {
+      if (prNumber === 1) {
+        throw new Error("db write failed");
+      }
+    });
+    const readerFor = vi.fn(async () =>
+      reader({
+        "octo/demo#1": { state: "closed", merged: true },
+        "octo/demo#2": { state: "closed", merged: true },
+      }),
+    );
+
+    const out = await runStatusPoll({ store, readerFor, batch: 50 });
+
+    // Both detected as changed; PR 2's write landed (counted), PR 1's failed.
+    expect(out).toEqual({ checked: 2, changed: 1 });
+    // Neither merged PR is in the synced set (changed rows get a full write, not a bump),
+    // so PR 1's failed write is left un-synced and re-attempted on the next tick.
+    expect(store.markSynced).toHaveBeenCalledWith([]);
   });
 });

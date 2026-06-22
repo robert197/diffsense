@@ -2,6 +2,7 @@ import {
   type Card,
   type CardDecision,
   DeckSchema,
+  type PrStatusValue,
   isArchivedStatus,
   resumeState,
 } from "@diffsense/core";
@@ -172,7 +173,8 @@ export interface PrStatusRow {
   owner: string;
   repo: string;
   prNumber: number;
-  status: string;
+  /** The DB CHECK constrains this to the lifecycle domain — type it as such. */
+  status: PrStatusValue;
 }
 
 // GitHub owner / repo names and commit SHAs cannot contain "/", so it is a
@@ -256,7 +258,7 @@ export function summarizeSessions(
   }
 
   // PR lifecycle status, keyed per PR — what routes a session to the Done bucket.
-  const statusByPr = new Map<string, string>();
+  const statusByPr = new Map<string, PrStatusValue>();
   for (const s of statusRows) {
     statusByPr.set(prKey(s.owner, s.repo, s.prNumber), s.status);
   }
@@ -292,8 +294,8 @@ export function summarizeSessions(
       continue;
     }
 
-    const status = statusByPr.get(pr) ?? "open";
-    if (isArchivedStatus(status as "merged" | "closed")) {
+    const status: PrStatusValue = statusByPr.get(pr) ?? "open";
+    if (isArchivedStatus(status)) {
       // The PR has merged/closed — a finished session, shown in Done regardless of
       // how far the reviewer got. Keep only the newest touched head per PR.
       const candidate: ArchivedReview = {
@@ -433,7 +435,14 @@ export async function listReviewSessions(
       ),
   ]);
 
-  return summarizeSessions(progressRows, deckRows as ProgressDeckRow[], statusRows);
+  // The `status` text column is constrained to the lifecycle domain by the DB CHECK,
+  // so narrowing the Drizzle `string` projection to `PrStatusValue` is sound here —
+  // the same boundary cast `deckRows` uses for its validated JSON shape.
+  return summarizeSessions(
+    progressRows,
+    deckRows as ProgressDeckRow[],
+    statusRows as PrStatusRow[],
+  );
 }
 
 /**

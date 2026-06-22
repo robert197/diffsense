@@ -1,5 +1,6 @@
 import {
   type GitHubPrRef,
+  type PrLifecycle,
   type PrStatusReader,
   type PrStatusStore,
   derivePrStatus,
@@ -59,9 +60,21 @@ export interface PollDeps {
 
 /**
  * Reconcile one bounded batch of still-open PRs against their live GitHub state.
- * PRs whose status is unchanged (or that 404) get their `synced_at` bumped so the
- * poll rotates forward; PRs that merged/closed/reopened get a full status write.
- * Per-PR and per-installation errors are logged and skipped, never fatal.
+ * PRs whose status is unchanged, that 404, or whose live read fails get their
+ * `synced_at` bumped so the poll rotates forward; PRs that merged/closed/reopened
+ * get a full status write. Per-PR and per-installation errors are logged and skipped,
+ * never fatal.
+ *
+ * Liveness invariant: every row whose GitHub read did not yield a pending status
+ * write advances `synced_at`. The batch is the oldest-synced PRs (`listOpenForPoll`
+ * orders `synced_at ASC`), so a row that failed to read and did NOT advance would
+ * re-anchor the batch head every tick — a cluster of persistently-failing reads
+ * (a suspended installation, deleted-but-still-open rows, sustained rate limiting)
+ * would then starve every healthy open PR and defeat the offline-merge fallback
+ * (R4) while wasting GitHub budget (R5). So a failed read rotates to the back
+ * instead; the row stays `open` and is re-read on the next full rotation. The one
+ * row we deliberately leave un-synced is a genuine change whose `recordStatus`
+ * write failed — that has pending work, so the next tick should retry it promptly.
  */
 export async function runStatusPoll({
   store,
@@ -85,7 +98,8 @@ export async function runStatusPoll({
     }
   }
 
-  const unchanged: GitHubPrRef[] = [];
+  // Rows to advance `synced_at` for (read OK + no change, 404, or read failed).
+  const toSync: GitHubPrRef[] = [];
   let checked = 0;
   let changed = 0;
 
@@ -95,34 +109,58 @@ export async function runStatusPoll({
       reader = await readerFor(installationId);
     } catch (err) {
       console.error(`[pr-status] could not build reader for installation ${installationId}:`, err);
+      // The whole installation is unreadable this tick (e.g. suspended/uninstalled).
+      // Rotate its rows to the back so they don't pin the batch head forever (R4/R5).
+      for (const row of group) {
+        toSync.push({ owner: row.owner, repo: row.repo, prNumber: row.prNumber });
+      }
       continue;
     }
     for (const row of group) {
       const ref: GitHubPrRef = { owner: row.owner, repo: row.repo, prNumber: row.prNumber };
       checked++;
+      let live: PrLifecycle | null;
       try {
-        const live = await reader.getPullRequestState(ref);
-        if (live === null) {
-          // PR no longer exists — bump synced_at so we don't re-check it immediately.
-          unchanged.push(ref);
-          continue;
-        }
-        const result = reconcilePrStatus(row.status, live);
-        if (result.changed) {
-          await store.recordStatus({ ...ref, installationId, status: result.status });
-          changed++;
-        } else {
-          unchanged.push(ref);
-        }
+        live = await reader.getPullRequestState(ref);
       } catch (err) {
-        // Leave it for the next tick (don't bump synced_at) so a transient failure
-        // is retried sooner rather than waiting a full rotation.
-        console.error(`[pr-status] poll failed for ${ref.owner}/${ref.repo}#${ref.prNumber}:`, err);
+        // A read failure (transient GitHub error, or the throttler giving up after its
+        // bounded retries) still advances `synced_at` so the row rotates to the back of
+        // the oldest-synced batch rather than re-anchoring the head every tick. It stays
+        // `open`, so it is re-read on the next full rotation.
+        console.error(
+          `[pr-status] poll read failed for ${ref.owner}/${ref.repo}#${ref.prNumber}:`,
+          err,
+        );
+        toSync.push(ref);
+        continue;
+      }
+      if (live === null) {
+        // PR no longer exists — bump synced_at so we don't re-check it immediately.
+        toSync.push(ref);
+        continue;
+      }
+      const result = reconcilePrStatus(row.status, live);
+      if (!result.changed) {
+        toSync.push(ref);
+        continue;
+      }
+      try {
+        await store.recordStatus({ ...ref, installationId, status: result.status });
+        changed++;
+      } catch (err) {
+        // The PR genuinely changed but persisting it failed — leave `synced_at`
+        // untouched so the next tick retries the write promptly rather than waiting a
+        // full rotation. A row-specific write failure is rare and self-limiting (a
+        // batch-wide DB outage fails `listOpenForPoll` and the whole tick instead).
+        console.error(
+          `[pr-status] poll write failed for ${ref.owner}/${ref.repo}#${ref.prNumber}:`,
+          err,
+        );
       }
     }
   }
 
-  await store.markSynced(unchanged);
+  await store.markSynced(toSync);
   return { checked, changed };
 }
 
@@ -157,7 +195,11 @@ export function startStatusWorker(config: Config): Worker {
         if (result.checked > 0) {
           console.log(`[pr-status] poll checked ${result.checked}, updated ${result.changed}`);
         }
+        return;
       }
+      // A job name this consumer doesn't recognize (a stale repeatable from a prior
+      // deploy, or a typo in the job constants) would otherwise be silently acked.
+      console.warn(`[pr-status] ignoring unknown job name: ${job.name}`);
     },
     { connection },
   );

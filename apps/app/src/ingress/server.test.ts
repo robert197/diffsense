@@ -159,6 +159,30 @@ describe("ingress /webhook (R2)", () => {
     expect(enqueueStatus).not.toHaveBeenCalled();
   });
 
+  it("returns 503 when the status queue is unavailable on a closed event (#31)", async () => {
+    // The closed/reopened path shares the producer try/catch with the review path; prove
+    // a status-queue failure on a merged PR also 503s so GitHub redelivers the lifecycle
+    // event rather than dropping the merge (the poll fallback would otherwise have to
+    // notice it later). Without this, the `enqueueStatus!` branch of the catch is untested.
+    const enqueueStatus = vi.fn<(job: PrStatusUpdateJob) => Promise<void>>(async () => {
+      throw new Error("redis down");
+    });
+    const app = createServer({
+      webhookSecret: SECRET,
+      enqueue: vi.fn(async () => {}),
+      enqueueStatus,
+    });
+    const body = JSON.stringify({
+      ...openedFixture,
+      action: "closed",
+      pull_request: { ...openedFixture.pull_request, merged: true, state: "closed" },
+    });
+
+    const res = await post(app, body, baseHeaders(body));
+
+    expect(res.status).toBe(503);
+  });
+
   it("returns 503 when the queue is unavailable", async () => {
     const enqueue = vi.fn<(ref: PrRef) => Promise<void>>(async () => {
       throw new Error("redis down");

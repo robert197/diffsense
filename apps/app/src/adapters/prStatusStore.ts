@@ -96,7 +96,10 @@ export function createDrizzlePrStatusStore(db: Database): PrStatusStore {
         })
         .from(prStatus)
         .where(eq(prStatus.status, "open"))
-        .orderBy(asc(prStatus.syncedAt))
+        // `id` breaks `synced_at` ties (rows seeded in one statement share `now()`),
+        // so the batch boundary is deterministic and the oldest-synced scan can't
+        // perpetually re-pick the same row just past the limit while skipping its peer.
+        .orderBy(asc(prStatus.syncedAt), asc(prStatus.id))
         .limit(limit);
 
       // `status` is constrained to the lifecycle domain at the DB; narrow the text
