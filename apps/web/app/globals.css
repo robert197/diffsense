@@ -1,0 +1,176 @@
+@import "tailwindcss";
+
+/*
+ * diffsense design tokens (Tailwind v4, CSS-first).
+ *
+ * The product is dark-only — a focused review surface — so the palette lives on
+ * :root directly (no theme toggle). Tokens follow the shadcn naming convention so
+ * the `components/ui` primitives stay portable, plus a risk-tier scale (High /
+ * Medium / Low) that reads the same colour on every surface (deck, findings,
+ * dashboard). Map raw values → Tailwind utilities via `@theme inline` below.
+ */
+
+:root {
+  --radius: 0.75rem;
+
+  /* Surfaces — a deep, slightly-blue near-black that steps up by elevation. */
+  --background: #08090c;
+  --foreground: #eaedf3;
+  --card: #101319;
+  --card-foreground: #eaedf3;
+  --popover: #151922;
+  --popover-foreground: #eaedf3;
+  --elevated: #151922;
+
+  /* Brand — a vivid blue for the single primary action per screen. */
+  --primary: #5b8cff;
+  --primary-foreground: #06080d;
+
+  --secondary: #1a202b;
+  --secondary-foreground: #e8ebf2;
+  --muted: #161b25;
+  --muted-foreground: #93a0b4;
+  --accent: #1c2533;
+  --accent-foreground: #e8ebf2;
+
+  --destructive: #f0616d;
+  --destructive-foreground: #06080d;
+  --success: #3ddc97;
+  --success-foreground: #06080d;
+
+  --border: #20242e;
+  --border-strong: #2b313d;
+  --input: #2a3342;
+  --ring: #5b8cff;
+
+  /* Elevation — a soft ambient drop plus a 1px top highlight for crisp edges. */
+  --shadow-card: 0 1px 0 0 rgba(255, 255, 255, 0.03) inset, 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-pop: 0 1px 0 0 rgba(255, 255, 255, 0.04) inset, 0 16px 48px -16px rgba(0, 0, 0, 0.7);
+
+  /* Risk tiers — the core signal. Each has a solid accent, a tinted fill, and a
+     readable on-tint foreground for chips/meters. */
+  --tier-high: #f0616d;
+  --tier-high-fill: rgba(240, 97, 109, 0.14);
+  --tier-medium: #f5b53d;
+  --tier-medium-fill: rgba(245, 181, 61, 0.14);
+  --tier-low: #8fa1ba;
+  --tier-low-fill: rgba(143, 161, 186, 0.12);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-elevated: var(--elevated);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --shadow-card: var(--shadow-card);
+  --shadow-pop: var(--shadow-pop);
+
+  --color-tier-high: var(--tier-high);
+  --color-tier-high-fill: var(--tier-high-fill);
+  --color-tier-medium: var(--tier-medium);
+  --color-tier-medium-fill: var(--tier-medium-fill);
+  --color-tier-low: var(--tier-low);
+  --color-tier-low-fill: var(--tier-low-fill);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", monospace;
+
+  --animate-in: enter 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--background);
+    /* A faint top-centre glow + hairline grid give the dark surface depth without
+       competing with content. */
+    background-image: radial-gradient(
+      120% 60% at 50% -10%,
+      color-mix(in srgb, var(--primary) 7%, transparent),
+      transparent 60%
+    );
+    background-attachment: fixed;
+    color: var(--foreground);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    letter-spacing: -0.011em;
+  }
+
+  /* A visible, on-brand focus ring everywhere a keyboard lands. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: color-mix(in srgb, var(--primary) 30%, transparent);
+  }
+
+  /* Quiet, themed scrollbars so code blocks don't punch a bright bar. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--border);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

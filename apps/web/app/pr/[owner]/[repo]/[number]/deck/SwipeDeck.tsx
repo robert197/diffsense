@@ -1,18 +1,34 @@
 "use client";
 
 import {
+  Check,
+  CheckCircle2,
+  ExternalLink,
+  FileCode2,
+  Lightbulb,
+  MessageSquarePlus,
+  Sparkles,
+  X,
+} from "lucide-react";
+import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   useActionState,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useTransition,
 } from "react";
+import { RiskMeter, TierBadge } from "../../../../../../components/review/RiskIndicator";
+import { Button } from "../../../../../../components/ui/button";
+import { Kbd } from "../../../../../../components/ui/kbd";
+import { Textarea } from "../../../../../../components/ui/textarea";
+import { cn } from "../../../../../../lib/cn";
 import type { CardView, CodeLine } from "../../../../../../lib/codeWindow";
 import { deckProgress, resolveSwipe, swipeSentiment } from "../../../../../../lib/codeWindow";
-import { TIER_COLOR, progressFill, progressTrack } from "../../../../../../lib/ui";
+import { normalizeTier } from "../../../../../../lib/ui";
 
 /**
  * The swipe deck (issue #27) — the heart of the product. Renders a PR's deck as a
@@ -100,6 +116,16 @@ export function SwipeDeck({
   const total = cards.length;
   const current = index < total ? cards[index] : null;
   const progress = deckProgress(index, total);
+
+  // The deck's risk make-up — shown up front so the reviewer knows the lay of the
+  // land (how many high-risk cards are coming) before they start swiping.
+  const composition = useMemo(() => {
+    const c = { High: 0, Medium: 0, Low: 0 };
+    for (const card of cards) {
+      c[normalizeTier(card.tier)] += 1;
+    }
+    return c;
+  }, [cards]);
 
   const clearAdvanceTimer = useCallback(() => {
     if (advanceTimer.current) {
@@ -228,7 +254,11 @@ export function SwipeDeck({
   }
 
   if (total === 0) {
-    return <p style={{ opacity: 0.6 }}>This deck has no cards — there is nothing to review.</p>;
+    return (
+      <p className="rounded-xl border border-dashed border-border bg-card/50 px-6 py-12 text-center text-muted-foreground">
+        This deck has no cards — there is nothing to review.
+      </p>
+    );
   }
 
   if (!current) {
@@ -249,22 +279,29 @@ export function SwipeDeck({
 
   return (
     <div>
+      <DeckSummary composition={composition} total={total} />
       <ProgressBar done={progress.done} total={progress.total} percent={progress.percent} />
 
-      <div style={stackWrap}>
+      <div className="relative min-h-[22rem]">
         {/* A peek of the next card to convey a deck behind the top one. */}
-        {cards[index + 1] && <div style={peekStyle} aria-hidden="true" />}
+        {cards[index + 1] && (
+          <div
+            aria-hidden
+            className="absolute inset-x-2 top-3 h-full scale-[0.97] rounded-xl border border-border bg-card/40"
+          />
+        )}
 
         <div
           data-testid="swipe-card"
-          style={{ ...cardStyle, ...topStyle }}
+          style={topStyle}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp}
           onLostPointerCapture={onLostPointerCapture}
+          className="relative cursor-grab touch-pan-y select-none rounded-xl border border-border bg-card p-5 shadow-[0_12px_40px_-12px_rgba(0,0,0,0.6)] active:cursor-grabbing"
         >
-          {intent && <IntentBadge intent={intent} />}
+          {intent && <IntentStamp intent={intent} strength={Math.min(Math.abs(dragX) / 120, 1)} />}
           {/* Key per card so the composer's open/draft/result state resets on advance. */}
           <CardBody
             key={current.fingerprint}
@@ -277,14 +314,66 @@ export function SwipeDeck({
         </div>
       </div>
 
-      <div style={controls}>
-        <button type="button" style={flagButton} onClick={() => commit("left")}>
-          ✕ Flag
-        </button>
-        <span style={{ opacity: 0.5, fontSize: "0.8rem" }}>← → or swipe</span>
-        <button type="button" style={goodButton} onClick={() => commit("right")}>
-          Looks good ✓
-        </button>
+      <div className="mt-5 grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+        <Button type="button" variant="danger" size="lg" onClick={() => commit("left")}>
+          <X />
+          Flag
+        </Button>
+        <div className="flex flex-col items-center gap-1 text-muted-foreground">
+          <div className="flex items-center gap-1">
+            <Kbd>←</Kbd>
+            <Kbd>→</Kbd>
+          </div>
+          <span className="text-[0.7rem]">or swipe</span>
+        </div>
+        <Button type="button" variant="success" size="lg" onClick={() => commit("right")}>
+          Looks good
+          <Check />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The deck's risk make-up at a glance: a single segmented bar (high → low) plus the
+ * per-tier counts. Lets the reviewer size up the work before the first swipe — the
+ * whole point of risk-ordering is knowing where the danger is concentrated.
+ */
+function DeckSummary({
+  composition,
+  total,
+}: {
+  composition: { High: number; Medium: number; Low: number };
+  total: number;
+}) {
+  const segments = [
+    { key: "High", count: composition.High, fill: "bg-tier-high", text: "text-tier-high" },
+    { key: "Medium", count: composition.Medium, fill: "bg-tier-medium", text: "text-tier-medium" },
+    { key: "Low", count: composition.Low, fill: "bg-tier-low", text: "text-tier-low" },
+  ].filter((s) => s.count > 0);
+
+  return (
+    <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+      <div className="flex items-center gap-3 text-xs">
+        {segments.map((s) => (
+          <span key={s.key} className="flex items-center gap-1.5">
+            <span className={cn("size-2 rounded-full", s.fill)} />
+            <span className="tabular-nums text-foreground/80">{`${s.count} ${s.key}`}</span>
+          </span>
+        ))}
+      </div>
+      <span className="text-xs text-muted-foreground tabular-nums">
+        {total} {total === 1 ? "card" : "cards"}
+      </span>
+      <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+        {segments.map((s) => (
+          <div
+            key={s.key}
+            className={cn("h-full", s.fill)}
+            style={{ width: `${(s.count / total) * 100}%` }}
+          />
+        ))}
       </div>
     </div>
   );
@@ -305,26 +394,33 @@ function CardBody({
 }) {
   return (
     <article>
-      <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "0.6rem" }}>
-        <span style={{ ...tierChip, background: TIER_COLOR[card.tier] ?? "#9ca3af" }}>
-          {card.tier}
-        </span>
-        <code style={{ fontSize: "0.8rem", opacity: 0.9, wordBreak: "break-all" }}>
-          {card.file}
-        </code>
-        <span style={{ marginLeft: "auto", ...riskBadge }}>risk {card.riskScore.toFixed(1)}</span>
+      <div className="flex items-start gap-3">
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          <TierBadge tier={card.tier} className="self-start" />
+          <code className="truncate text-sm text-foreground/90">{card.file}</code>
+        </div>
+        <RiskMeter tier={card.tier} score={card.riskScore} />
       </div>
 
-      <CodeBlock card={card} />
+      <div className="mt-4">
+        <CodeBlock card={card} />
+      </div>
 
-      <p style={{ margin: "0.85rem 0 0", lineHeight: 1.5 }}>{card.explanation}</p>
+      <div className="mt-4">
+        <Eyebrow icon={<Sparkles className="size-3.5" />}>What this change does</Eyebrow>
+        <p className="mt-1.5 leading-relaxed">{card.explanation}</p>
+      </div>
 
       {card.suggestions.length > 0 && (
-        <section style={{ marginTop: "0.85rem" }}>
-          <h2 style={heading}>What could be wrong</h2>
-          <ul style={{ margin: 0, paddingLeft: "1.1rem", display: "grid", gap: "0.4rem" }}>
+        <section className="mt-4">
+          <Eyebrow icon={<Lightbulb className="size-3.5" />}>What could be wrong</Eyebrow>
+          <ul className="mt-2 flex flex-col gap-1.5">
             {card.suggestions.map((s, i) => (
-              <li key={`${card.fingerprint}-sug-${i}`} style={{ lineHeight: 1.45 }}>
+              <li
+                key={`${card.fingerprint}-sug-${i}`}
+                className="flex gap-2 rounded-lg border border-tier-medium/20 bg-tier-medium-fill/40 px-3 py-2 text-sm leading-relaxed"
+              >
+                <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-tier-medium" />
                 {s}
               </li>
             ))}
@@ -377,14 +473,19 @@ function CommentComposer({
     : "Posts a comment to the PR conversation";
 
   return (
-    <section style={{ marginTop: "1rem", borderTop: "1px solid #1f2933", paddingTop: "0.85rem" }}>
+    <section className="mt-5 border-t border-border pt-4">
       {card.postedComments.length > 0 && (
-        <div style={{ marginBottom: "0.75rem" }}>
-          <h2 style={heading}>Posted to GitHub</h2>
-          <ul style={{ margin: 0, paddingLeft: "1.1rem", display: "grid", gap: "0.3rem" }}>
+        <div className="mb-3">
+          <Eyebrow icon={<CheckCircle2 className="size-3.5" />}>Posted to GitHub</Eyebrow>
+          <ul className="mt-2 flex flex-col gap-1">
             {card.postedComments.map((c) => (
-              <li key={c.htmlUrl} style={{ lineHeight: 1.45, fontSize: "0.82rem" }}>
-                <a href={c.htmlUrl} target="_blank" rel="noreferrer" style={postedLink}>
+              <li key={c.htmlUrl} className="text-sm leading-relaxed">
+                <a
+                  href={c.htmlUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-primary underline underline-offset-2 hover:brightness-110"
+                >
                   {c.body.length > 80 ? `${c.body.slice(0, 80)}…` : c.body}
                 </a>
               </li>
@@ -394,41 +495,43 @@ function CommentComposer({
       )}
 
       {!open ? (
-        <button type="button" style={composerToggle} onClick={() => setOpen(true)}>
-          💬 Comment on PR
-        </button>
+        <Button type="button" variant="outline" size="sm" onClick={() => setOpen(true)}>
+          <MessageSquarePlus />
+          Comment on PR
+        </Button>
       ) : (
         <form action={formAction}>
           <input type="hidden" name="owner" value={owner} />
           <input type="hidden" name="repo" value={repo} />
           <input type="hidden" name="prNumber" value={prNumber} />
           <input type="hidden" name="fingerprint" value={card.fingerprint} />
-          <p style={{ margin: "0 0 0.4rem", fontSize: "0.75rem", opacity: 0.6 }}>{target}</p>
-          <textarea
-            name="body"
-            required
-            rows={3}
-            placeholder="Leave a comment on this change…"
-            style={composerTextarea}
-          />
-          <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
-            <button type="submit" style={postButton} disabled={pending}>
+          <p className="mb-2 text-xs text-muted-foreground">{target}</p>
+          <Textarea name="body" required rows={3} placeholder="Leave a comment on this change…" />
+          <div className="mt-2.5 flex gap-2">
+            <Button type="submit" size="sm" disabled={pending}>
               {pending ? "Posting…" : "Post comment"}
-            </button>
-            <button type="button" style={cancelButton} onClick={() => setOpen(false)}>
+            </Button>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(false)}>
               Cancel
-            </button>
+            </Button>
           </div>
           {state.ok && state.comment && (
-            <p style={{ margin: "0.5rem 0 0", fontSize: "0.82rem", color: "#34d399" }}>
-              Posted to GitHub ✓{" "}
-              <a href={state.comment.htmlUrl} target="_blank" rel="noreferrer" style={postedLink}>
+            <p className="mt-2.5 flex items-center gap-1.5 text-sm text-success">
+              <CheckCircle2 className="size-4" />
+              Posted to GitHub{" "}
+              <a
+                href={state.comment.htmlUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 underline underline-offset-2"
+              >
                 View comment
+                <ExternalLink className="size-3.5" />
               </a>
             </p>
           )}
           {!state.ok && state.error && (
-            <p role="alert" style={{ margin: "0.5rem 0 0", fontSize: "0.82rem", color: "#f87171" }}>
+            <p role="alert" className="mt-2.5 text-sm text-destructive">
               {state.error}
             </p>
           )}
@@ -441,9 +544,15 @@ function CommentComposer({
 function CodeBlock({ card }: { card: CardView }) {
   if (card.code && card.code.length > 0) {
     return (
-      <div>
-        <h2 style={heading}>{card.highlightLabel}</h2>
-        <pre style={codePre}>
+      <div className="overflow-hidden rounded-lg border border-border bg-background">
+        {/* Editor-style chrome: a header strip naming the lines to scrutinise. */}
+        <div className="flex items-center gap-2 border-b border-border/70 bg-secondary/40 px-3 py-2">
+          <FileCode2 className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="truncate font-mono text-[0.7rem] text-muted-foreground">
+            {card.highlightLabel}
+          </span>
+        </div>
+        <pre className="overflow-x-auto py-2 font-mono text-[0.78rem] leading-relaxed">
           <code>
             {card.code.map((line) => (
               <CodeLineRow key={line.number} line={line} />
@@ -456,10 +565,10 @@ function CodeBlock({ card }: { card: CardView }) {
 
   // No code window — show the highlight ranges descriptively (graceful fallback).
   return (
-    <div style={fallbackBox}>
-      <span style={{ fontSize: "0.78rem", opacity: 0.8 }}>{card.highlightLabel}</span>
+    <div className="rounded-lg border border-dashed border-border bg-background px-3 py-3 text-sm">
+      <span className="text-foreground/80">{card.highlightLabel}</span>
       {card.removedLines > 0 && (
-        <span style={{ fontSize: "0.78rem", opacity: 0.6, marginLeft: "0.5rem" }}>
+        <span className="ml-2 text-muted-foreground">
           ({card.removedLines} line{card.removedLines === 1 ? "" : "s"} removed)
         </span>
       )}
@@ -470,29 +579,27 @@ function CodeBlock({ card }: { card: CardView }) {
 function CodeLineRow({ line }: { line: CodeLine }) {
   return (
     <div
-      style={{
-        display: "flex",
-        background: line.highlighted ? "rgba(251, 191, 36, 0.14)" : "transparent",
-        borderLeft: line.highlighted ? "3px solid #fbbf24" : "3px solid transparent",
-      }}
+      className={cn(
+        "flex border-l-2",
+        line.highlighted ? "border-l-tier-medium bg-tier-medium-fill" : "border-l-transparent",
+      )}
     >
-      <span style={lineNo}>{line.number}</span>
-      <span style={{ whiteSpace: "pre", overflowX: "auto" }}>{line.text || " "}</span>
+      <span className="inline-block w-10 shrink-0 select-none pr-2.5 text-right text-muted-foreground/50 tabular-nums">
+        {line.number}
+      </span>
+      <span className="overflow-x-auto whitespace-pre pr-3">{line.text || " "}</span>
     </div>
   );
 }
 
 function ProgressBar({ done, total, percent }: { done: number; total: number; percent: number }) {
   return (
-    <div style={{ marginBottom: "1rem" }}>
-      <div
-        style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.35rem" }}
-        aria-hidden="true"
-      >
-        <span style={{ fontSize: "0.78rem", opacity: 0.7 }}>
+    <div className="mb-4">
+      <div className="mb-1.5 flex items-center justify-between text-xs" aria-hidden>
+        <span className="font-medium text-foreground/80 tabular-nums">
           {done} / {total} reviewed
         </span>
-        <span style={{ fontSize: "0.78rem", opacity: 0.5 }}>{percent}%</span>
+        <span className="text-muted-foreground tabular-nums">{percent}%</span>
       </div>
       {/* Native progress carries the accessible semantics; the styled bar below is
           decorative so the dark theme renders consistently across browsers. */}
@@ -500,34 +607,32 @@ function ProgressBar({ done, total, percent }: { done: number; total: number; pe
         value={done}
         max={Math.max(total, 1)}
         aria-label="Deck review progress"
-        style={srOnly}
+        className="sr-only"
       />
-      <div style={progressTrack} aria-hidden="true">
-        {/* Animate the fill width so the bar eases forward on each swipe. */}
-        <div style={{ ...progressFill, width: `${percent}%`, transition: "width 200ms ease" }} />
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-secondary" aria-hidden>
+        <div
+          className="h-full rounded-full bg-primary transition-[width] duration-200 ease-out"
+          style={{ width: `${percent}%` }}
+        />
       </div>
     </div>
   );
 }
 
-function IntentBadge({ intent }: { intent: "good" | "flag" }) {
+/** A drag-direction stamp that strengthens as the reviewer commits to a swipe. */
+function IntentStamp({ intent, strength }: { intent: "good" | "flag"; strength: number }) {
   const good = intent === "good";
   return (
     <span
-      style={{
-        position: "absolute",
-        top: "0.8rem",
-        ...(good ? { right: "0.8rem" } : { left: "0.8rem" }),
-        fontSize: "0.72rem",
-        fontWeight: 700,
-        letterSpacing: "0.05em",
-        textTransform: "uppercase",
-        padding: "0.2rem 0.5rem",
-        borderRadius: 6,
-        border: `1px solid ${good ? "#34d399" : "#f87171"}`,
-        color: good ? "#34d399" : "#f87171",
-      }}
+      style={{ opacity: 0.4 + strength * 0.6 }}
+      className={cn(
+        "pointer-events-none absolute top-4 z-10 inline-flex items-center gap-1.5 rounded-md border-2 px-2.5 py-1 text-xs font-bold uppercase tracking-wider",
+        good
+          ? "right-4 rotate-6 border-success text-success"
+          : "left-4 -rotate-6 border-destructive text-destructive",
+      )}
     >
+      {good ? <Check className="size-3.5" /> : <X className="size-3.5" />}
       {good ? "Looks good" : "Flag"}
     </span>
   );
@@ -535,200 +640,35 @@ function IntentBadge({ intent }: { intent: "good" | "flag" }) {
 
 function DeckDone({ counts, total }: { counts: { up: number; down: number }; total: number }) {
   return (
-    <div style={{ ...cardStatic, textAlign: "center" }}>
-      <h2 style={{ margin: "0 0 0.5rem", fontSize: "1.2rem" }}>You've reviewed the whole deck</h2>
-      <p style={{ opacity: 0.7, lineHeight: 1.5, margin: "0 0 1rem" }}>
+    <div className="rounded-xl border border-border bg-card p-8 text-center">
+      <div className="mx-auto mb-4 grid size-14 place-items-center rounded-full border border-success/40 bg-success/10 text-success">
+        <CheckCircle2 className="size-7" />
+      </div>
+      <h2 className="text-xl font-semibold tracking-tight">You've reviewed the whole deck</h2>
+      <p className="mx-auto mt-2 max-w-md leading-relaxed text-muted-foreground">
         Every one of the {total} changed {total === 1 ? "chunk" : "chunks"} has been seen, the
         riskiest first. This is advisory — your swipes are signal, not a verdict.
       </p>
-      <p style={{ margin: 0 }}>
-        <span style={{ color: "#34d399", fontWeight: 600 }}>{counts.up} looked good</span>
-        {"  ·  "}
-        <span style={{ color: "#f87171", fontWeight: 600 }}>{counts.down} flagged</span>
-      </p>
+      <div className="mt-5 flex items-center justify-center gap-3">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-success/40 bg-success/10 px-3 py-1.5 text-sm font-semibold text-success">
+          <Check className="size-4" />
+          {counts.up} looked good
+        </span>
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-sm font-semibold text-destructive">
+          <X className="size-4" />
+          {counts.down} flagged
+        </span>
+      </div>
     </div>
   );
 }
 
-const stackWrap: CSSProperties = {
-  position: "relative",
-  minHeight: 360,
-};
-
-const cardStyle: CSSProperties = {
-  position: "relative",
-  border: "1px solid #1f2933",
-  borderRadius: 14,
-  padding: "1.1rem 1.25rem",
-  background: "#11151a",
-  boxShadow: "0 8px 30px rgba(0,0,0,0.35)",
-  cursor: "grab",
-  userSelect: "none",
-  WebkitUserSelect: "none",
-};
-
-const cardStatic: CSSProperties = {
-  border: "1px solid #1f2933",
-  borderRadius: 14,
-  padding: "1.5rem 1.25rem",
-  background: "#11151a",
-};
-
-const peekStyle: CSSProperties = {
-  position: "absolute",
-  inset: 0,
-  top: 10,
-  transform: "scale(0.97)",
-  border: "1px solid #1f2933",
-  borderRadius: 14,
-  background: "#0d1116",
-  opacity: 0.6,
-};
-
-const controls: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: "0.6rem",
-  marginTop: "1.1rem",
-};
-
-const buttonBase: CSSProperties = {
-  minHeight: 44,
-  padding: "0.6rem 1rem",
-  borderRadius: 10,
-  fontWeight: 600,
-  fontSize: "0.95rem",
-  cursor: "pointer",
-  background: "transparent",
-};
-
-const flagButton: CSSProperties = {
-  ...buttonBase,
-  border: "1px solid #f87171",
-  color: "#f87171",
-};
-
-const goodButton: CSSProperties = {
-  ...buttonBase,
-  border: "1px solid #34d399",
-  color: "#34d399",
-};
-
-const tierChip: CSSProperties = {
-  fontSize: "0.7rem",
-  fontWeight: 700,
-  color: "#0b0d10",
-  borderRadius: 999,
-  padding: "0.1rem 0.55rem",
-};
-
-const riskBadge: CSSProperties = {
-  fontSize: "0.7rem",
-  opacity: 0.7,
-  border: "1px solid #374151",
-  borderRadius: 999,
-  padding: "0.1rem 0.5rem",
-  whiteSpace: "nowrap",
-};
-
-const heading: CSSProperties = {
-  fontSize: "0.7rem",
-  textTransform: "uppercase",
-  letterSpacing: "0.04em",
-  opacity: 0.55,
-  margin: "0 0 0.35rem",
-};
-
-const codePre: CSSProperties = {
-  margin: 0,
-  padding: "0.6rem 0",
-  background: "#0b0d10",
-  border: "1px solid #1f2933",
-  borderRadius: 8,
-  fontSize: "0.78rem",
-  lineHeight: 1.5,
-  overflowX: "auto",
-};
-
-const lineNo: CSSProperties = {
-  display: "inline-block",
-  width: "2.6rem",
-  paddingRight: "0.6rem",
-  textAlign: "right",
-  opacity: 0.4,
-  userSelect: "none",
-  flexShrink: 0,
-};
-
-const fallbackBox: CSSProperties = {
-  padding: "0.7rem 0.8rem",
-  background: "#0b0d10",
-  border: "1px dashed #374151",
-  borderRadius: 8,
-};
-
-const composerToggle: CSSProperties = {
-  minHeight: 40,
-  padding: "0.5rem 0.9rem",
-  borderRadius: 10,
-  border: "1px solid #374151",
-  background: "transparent",
-  color: "#e5e7eb",
-  fontSize: "0.85rem",
-  fontWeight: 600,
-  cursor: "pointer",
-};
-
-const composerTextarea: CSSProperties = {
-  width: "100%",
-  boxSizing: "border-box",
-  padding: "0.55rem 0.65rem",
-  borderRadius: 8,
-  border: "1px solid #374151",
-  background: "#0b0d10",
-  color: "#e5e7eb",
-  fontSize: "0.85rem",
-  lineHeight: 1.45,
-  resize: "vertical",
-};
-
-const postButton: CSSProperties = {
-  minHeight: 40,
-  padding: "0.5rem 0.95rem",
-  borderRadius: 10,
-  border: "1px solid #3b82f6",
-  background: "rgba(59, 130, 246, 0.14)",
-  color: "#93c5fd",
-  fontSize: "0.85rem",
-  fontWeight: 600,
-  cursor: "pointer",
-};
-
-const cancelButton: CSSProperties = {
-  minHeight: 40,
-  padding: "0.5rem 0.85rem",
-  borderRadius: 10,
-  border: "1px solid #374151",
-  background: "transparent",
-  color: "#9ca3af",
-  fontSize: "0.85rem",
-  cursor: "pointer",
-};
-
-const postedLink: CSSProperties = {
-  color: "#60a5fa",
-  textDecoration: "underline",
-};
-
-const srOnly: CSSProperties = {
-  position: "absolute",
-  width: 1,
-  height: 1,
-  padding: 0,
-  margin: -1,
-  overflow: "hidden",
-  clip: "rect(0 0 0 0)",
-  whiteSpace: "nowrap",
-  border: 0,
-};
+/** A small uppercase section label, used for the card's content sections. */
+function Eyebrow({ icon, children }: { icon?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <h2 className="flex items-center gap-1.5 text-[0.7rem] font-semibold uppercase tracking-wider text-muted-foreground">
+      {icon}
+      {children}
+    </h2>
+  );
+}

@@ -1,95 +1,85 @@
-import type { CSSProperties } from "react";
-
 /**
- * Shared mobile-first styles for the entry-path screens (issue #25). A single
- * centered column that reads well at ~360px and scales to desktop; rows are
- * full-width with ≥44px touch targets. Inline styles match the existing surface
- * (`app/layout.tsx`, `app/page.tsx`); no CSS framework is introduced.
+ * Cross-surface UI helpers shared by the deck, findings list, and dashboard.
+ *
+ * The big idea the product sells is *attention allocation by risk* — so a risk tier
+ * must read identically everywhere. `TIER_META` is the single source for a tier's
+ * label, colour, and the Tailwind classes its chip/meter use; `TIER_COLOR` keeps the
+ * raw accent for the few inline cases (the code-window highlight rail). `relativeTime`
+ * formats the "3h ago" labels on PR and review rows.
  */
 
-export const page: CSSProperties = {
-  maxWidth: 640,
-  margin: "0 auto",
-  padding: "1.5rem 1.25rem 3rem",
-};
+export type Tier = "High" | "Medium" | "Low";
 
-export const list: CSSProperties = {
-  listStyle: "none",
-  padding: 0,
-  margin: 0,
-  display: "grid",
-  gap: "0.6rem",
-};
-
-/** A tappable navigation row (repo or PR). Block-level link, large hit area. */
-export const row: CSSProperties = {
-  display: "block",
-  minHeight: 44,
-  padding: "0.85rem 1rem",
-  border: "1px solid #1f2933",
-  borderRadius: 10,
-  background: "#11151a",
-  color: "#e6e8eb",
-  textDecoration: "none",
-};
-
-export const muted: CSSProperties = {
-  opacity: 0.6,
-  fontSize: "0.85rem",
-};
-
-/**
- * Risk-tier accent colours, shared by the findings list (#13) and the swipe deck
- * (#27) so a tier always reads the same colour across surfaces. Keyed by the
- * `Tier` enum the ranking emits ("High" | "Medium" | "Low").
- */
+/** Raw accent colour per tier — for inline styles (e.g. the code highlight rail). */
 export const TIER_COLOR: Record<string, string> = {
-  High: "#f87171",
-  Medium: "#fbbf24",
-  Low: "#9ca3af",
+  High: "#f0616d",
+  Medium: "#f5b53d",
+  Low: "#8fa1ba",
 };
 
-export const badge: CSSProperties = {
-  fontSize: "0.65rem",
-  fontWeight: 700,
-  textTransform: "uppercase",
-  letterSpacing: "0.04em",
-  borderRadius: 999,
-  padding: "0.1rem 0.5rem",
-  border: "1px solid #374151",
-  opacity: 0.8,
+export interface TierMeta {
+  label: string;
+  /** Risk-meter fill (%) — derived from the tier bucket, so it reads right at any score scale. */
+  meterPct: number;
+  /** Chip classes: tinted fill + accent text + hairline border. */
+  chip: string;
+  /** Accent text colour utility. */
+  text: string;
+  /** Accent meter-fill background utility. */
+  fill: string;
+  /** Left accent-rail border utility for cards. */
+  rail: string;
+  /** One-word framing of what the tier asks of the reviewer. */
+  blurb: string;
+}
+
+export const TIER_META: Record<Tier, TierMeta> = {
+  High: {
+    label: "High risk",
+    meterPct: 92,
+    chip: "bg-tier-high-fill text-tier-high border-tier-high/30",
+    text: "text-tier-high",
+    fill: "bg-tier-high",
+    rail: "border-l-tier-high",
+    blurb: "Read this closely",
+  },
+  Medium: {
+    label: "Medium risk",
+    meterPct: 56,
+    chip: "bg-tier-medium-fill text-tier-medium border-tier-medium/30",
+    text: "text-tier-medium",
+    fill: "bg-tier-medium",
+    rail: "border-l-tier-medium",
+    blurb: "Worth a look",
+  },
+  Low: {
+    label: "Low risk",
+    meterPct: 24,
+    chip: "bg-tier-low-fill text-tier-low border-tier-low/30",
+    text: "text-tier-low",
+    fill: "bg-tier-low",
+    rail: "border-l-tier-low",
+    blurb: "Skim it",
+  },
 };
 
 /**
- * Shared progress-bar visuals. The riskiest-first swipe deck (#27) and the "Continue
- * reviewing" dashboard (#29) both render a thin track with a brand-blue fill, so the
- * track + fill colours live here once. Callers spread on top for context-specific
- * tweaks (the deck animates the width; the dashboard row stretches the track with flex).
+ * Normalise a tier value to the canonical `High`/`Medium`/`Low`. The deck schema
+ * emits capitalised tiers, but the findings store holds free-form strings (seed and
+ * older rows use lowercase), so every surface routes through this to read the same
+ * colour and label regardless of casing.
  */
-export const progressTrack: CSSProperties = {
-  height: 6,
-  borderRadius: 999,
-  background: "#1f2933",
-  overflow: "hidden",
-};
+export function normalizeTier(tier: string): Tier {
+  const t = tier.trim().toLowerCase();
+  if (t === "high") return "High";
+  if (t === "medium") return "Medium";
+  return "Low";
+}
 
-export const progressFill: CSSProperties = {
-  height: "100%",
-  background: "#2563eb",
-};
-
-export const primaryButton: CSSProperties = {
-  display: "inline-block",
-  padding: "0.7rem 1.1rem",
-  borderRadius: 8,
-  background: "#2563eb",
-  color: "#fff",
-  fontWeight: 600,
-  textDecoration: "none",
-  border: "none",
-  cursor: "pointer",
-  fontSize: "1rem",
-};
+/** Tier metadata, case-insensitive, with a safe fallback for any unexpected value. */
+export function tierMeta(tier: string): TierMeta {
+  return TIER_META[normalizeTier(tier)];
+}
 
 /** Compact relative-time label ("3h ago"). Falls back to the raw value. */
 export function relativeTime(iso: string, now: number = Date.now()): string {

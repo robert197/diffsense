@@ -1,6 +1,8 @@
 import type { Card, CardDecision } from "@diffsense/core";
+import { Clock3, Layers, ListTree } from "lucide-react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { AppHeader } from "../../../../../../components/site/AppHeader";
 import {
   type ActiveSession,
   clearSessionRow,
@@ -17,7 +19,6 @@ import {
   listPostedComments,
 } from "../../../../../../lib/prComments";
 import { computeResume, getDecidedFingerprints } from "../../../../../../lib/reviewProgress";
-import { page } from "../../../../../../lib/ui";
 import { LanguagePicker } from "./LanguagePicker";
 import { SwipeDeck } from "./SwipeDeck";
 import { postCardComment, recordSwipe } from "./actions";
@@ -103,54 +104,86 @@ export default async function DeckPage({ params }: { params: Promise<Params> }) 
     : { index: 0, counts: { up: 0, down: 0 } };
 
   return (
-    <main style={page}>
-      <header style={{ marginBottom: "1.25rem" }}>
-        <a
-          href={`/pr/${owner}/${repo}/${prNumber}`}
-          style={{ opacity: 0.6, textDecoration: "none" }}
-        >
-          ← Findings list
-        </a>
-        <h1 style={{ fontSize: "1.4rem", margin: "0.4rem 0 0" }}>
-          {owner}/{repo} #{prNumber}
-        </h1>
-        <p style={{ opacity: 0.65, margin: "0.35rem 0 0", lineHeight: 1.5 }}>
-          Swipe through the deck — riskiest changes first. Right if it looks good, left to flag.
-          Advisory only: your swipes are signal, not a verdict.
-        </p>
-        <LanguagePicker current={language} owner={owner} repo={repo} prNumber={prNumber} />
-      </header>
+    <>
+      <AppHeader
+        login={session.login}
+        crumbs={[
+          { label: "Repositories", href: "/repos" },
+          { label: `${owner}/${repo}`, href: `/repos/${owner}/${repo}/pulls` },
+          { label: `#${prNumber}` },
+        ]}
+      />
+      <main className="mx-auto max-w-2xl px-4 py-6 sm:px-6">
+        <div className="mb-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-border bg-card text-primary">
+                <Layers className="size-4.5" />
+              </span>
+              <div>
+                <h1 className="text-lg font-semibold leading-tight tracking-tight">
+                  {owner}/{repo} #{prNumber}
+                </h1>
+                <a
+                  href={`/pr/${owner}/${repo}/${prNumber}`}
+                  className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <ListTree className="size-3" />
+                  View findings list
+                </a>
+              </div>
+            </div>
+            <LanguagePicker current={language} owner={owner} repo={repo} prNumber={prNumber} />
+          </div>
+          <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+            Riskiest changes first. Swipe <span className="font-medium text-success">right</span> if
+            it looks good, <span className="font-medium text-destructive">left</span> to flag.
+            Advisory only — your swipes are signal, not a verdict.
+          </p>
+        </div>
 
-      {stale && <StaleNotice href={`/pr/${owner}/${repo}/${prNumber}/deck`} />}
+        {stale && <StaleNotice href={`/pr/${owner}/${repo}/${prNumber}/deck`} />}
 
-      {deck === null ? (
-        <p style={{ opacity: 0.6, lineHeight: 1.5 }}>
-          This PR's deck isn't ready yet. Once the engine has processed the PR, its cards will
-          appear here to swipe through.
-        </p>
-      ) : (
-        <SwipeDeck
-          cards={
-            await buildCardViews(
-              session.github,
-              owner,
-              repo,
-              deck.headSha,
-              cards,
-              groupPostedComments(postedComments),
-            )
-          }
-          owner={owner}
-          repo={repo}
-          prNumber={prNumber}
-          headSha={deck.headSha}
-          initialIndex={resume.index}
-          initialCounts={resume.counts}
-          recordSwipe={recordSwipe}
-          postComment={postCardComment}
-        />
-      )}
-    </main>
+        {deck === null ? (
+          <EmptyDeck />
+        ) : (
+          <SwipeDeck
+            cards={
+              await buildCardViews(
+                session.github,
+                owner,
+                repo,
+                deck.headSha,
+                cards,
+                groupPostedComments(postedComments),
+              )
+            }
+            owner={owner}
+            repo={repo}
+            prNumber={prNumber}
+            headSha={deck.headSha}
+            initialIndex={resume.index}
+            initialCounts={resume.counts}
+            recordSwipe={recordSwipe}
+            postComment={postCardComment}
+          />
+        )}
+      </main>
+    </>
+  );
+}
+
+function EmptyDeck() {
+  return (
+    <div className="rounded-xl border border-dashed border-border bg-card/50 px-6 py-12 text-center">
+      <div className="mx-auto mb-4 grid size-12 place-items-center rounded-full border border-border bg-card text-muted-foreground">
+        <Clock3 className="size-6" />
+      </div>
+      <p className="font-medium">This deck isn&apos;t ready yet</p>
+      <p className="mx-auto mt-1 max-w-sm text-sm leading-relaxed text-muted-foreground">
+        Once the engine has processed the PR, its cards appear here to swipe through.
+      </p>
+    </div>
   );
 }
 
@@ -189,24 +222,16 @@ async function resolveStaleDeck(
 /** Advisory banner: the deck predates the PR's current commit (the re-process path). */
 function StaleNotice({ href }: { href: string }) {
   return (
-    <div
-      style={{
-        marginBottom: "1.1rem",
-        padding: "0.7rem 0.9rem",
-        borderRadius: 10,
-        border: "1px solid #b45309",
-        background: "rgba(180, 83, 9, 0.12)",
-        color: "#fbbf24",
-        lineHeight: 1.5,
-        fontSize: "0.88rem",
-      }}
-    >
-      <strong>This deck is out of date.</strong> The pull request has new commits since this deck
-      was built, so it reviews older code. Your place is saved — a fresh deck appears here once the
-      engine reprocesses the new commit.{" "}
-      <a href={href} style={{ color: "#fbbf24", fontWeight: 600 }}>
-        Refresh
-      </a>
+    <div className="mb-4 flex items-start gap-2.5 rounded-lg border border-tier-medium/40 bg-tier-medium-fill px-4 py-3 text-sm leading-relaxed text-tier-medium">
+      <Clock3 className="mt-0.5 size-4 shrink-0" />
+      <p>
+        <span className="font-semibold">This deck is out of date.</span> The pull request has new
+        commits since this deck was built, so it reviews older code. Your place is saved — a fresh
+        deck appears once the engine reprocesses the new commit.{" "}
+        <a href={href} className="font-semibold underline underline-offset-2">
+          Refresh
+        </a>
+      </p>
     </div>
   );
 }

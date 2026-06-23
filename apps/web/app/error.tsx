@@ -1,6 +1,7 @@
 "use client";
 
-import { primaryButton } from "../lib/ui";
+import { RotateCw, TriangleAlert } from "lucide-react";
+import { Button } from "../components/ui/button";
 
 /**
  * App-level error boundary (issue #25). Server components in the entry path
@@ -11,18 +12,22 @@ import { primaryButton } from "../lib/ui";
  */
 export default function ErrorBoundary({ reset }: { error: Error; reset: () => void }) {
   return (
-    <main style={{ display: "grid", placeItems: "center", minHeight: "100vh", padding: "2rem" }}>
-      <div style={{ maxWidth: 460, width: "100%", textAlign: "center" }}>
-        <h1 style={{ fontSize: "1.4rem", marginBottom: "0.5rem" }}>Something went wrong</h1>
-        <p style={{ opacity: 0.7, lineHeight: 1.5, marginBottom: "1.5rem" }}>
+    <main className="grid min-h-dvh place-items-center px-6 py-16">
+      <div className="w-full max-w-md text-center">
+        <div className="mx-auto mb-5 grid size-12 place-items-center rounded-full border border-destructive/40 bg-destructive/10 text-destructive">
+          <TriangleAlert className="size-6" />
+        </div>
+        <h1 className="text-xl font-semibold tracking-tight">Something went wrong</h1>
+        <p className="mx-auto mt-2 max-w-sm leading-relaxed text-muted-foreground">
           We couldn&apos;t reach GitHub just now — it may be rate-limiting or temporarily
           unavailable. Try again in a moment.
         </p>
-        <div style={{ display: "grid", gap: "0.75rem", justifyItems: "center" }}>
-          <button type="button" onClick={() => reset()} style={primaryButton}>
+        <div className="mt-6 flex flex-col items-center gap-3">
+          <Button type="button" onClick={() => reset()}>
+            <RotateCw />
             Try again
-          </button>
-          <a href="/repos" style={{ color: "#9ca3af", fontSize: "0.85rem" }}>
+          </Button>
+          <a href="/repos" className="text-sm text-muted-foreground hover:text-foreground">
             Back to repositories
           </a>
         </div>

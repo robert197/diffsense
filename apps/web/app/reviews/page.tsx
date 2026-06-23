@@ -1,3 +1,7 @@
+import { CheckCircle2, GitMerge, Layers, PlayCircle, XCircle } from "lucide-react";
+import { AppHeader } from "../../components/site/AppHeader";
+import { Badge } from "../../components/ui/badge";
+import { Progress } from "../../components/ui/progress";
 import { requireSession } from "../../lib/auth/session";
 import { deckProgress } from "../../lib/codeWindow";
 import {
@@ -5,16 +9,7 @@ import {
   type InProgressReview,
   listReviewSessions,
 } from "../../lib/reviewProgress";
-import {
-  badge,
-  list,
-  muted,
-  page,
-  progressFill,
-  progressTrack,
-  relativeTime,
-  row,
-} from "../../lib/ui";
+import { relativeTime } from "../../lib/ui";
 
 /**
  * The reviewer dashboard (issue #29 + #31). "Continue reviewing" lists the signed-in
@@ -33,76 +28,81 @@ export default async function ReviewsPage() {
   const { active, archived } = await listReviewSessions(session.userId);
 
   return (
-    <main style={page}>
-      <header style={{ marginBottom: "1.25rem" }}>
-        <a href="/repos" style={{ ...muted, textDecoration: "none" }}>
-          ← Repositories
-        </a>
-        <h1 style={{ fontSize: "1.4rem", margin: "0.4rem 0 0" }}>Continue reviewing</h1>
-        <p style={{ ...muted, margin: "0.3rem 0 0", lineHeight: 1.5 }}>
-          Decks you&apos;ve started but not finished. Your place is saved on every swipe — pick up
-          right where you left off, on any device.
-        </p>
-      </header>
-
-      {active.length === 0 ? (
-        <p style={{ opacity: 0.7, lineHeight: 1.5 }}>
-          No reviews in progress. Swipe through a PR&apos;s deck and your place is saved here.
-        </p>
-      ) : (
-        <ul style={list}>
-          {active.map((review) => (
-            <li key={`${review.owner}/${review.repo}#${review.prNumber}@${review.headSha}`}>
-              <ReviewRow review={review} />
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {archived.length > 0 && (
-        <section style={{ marginTop: "2rem" }}>
-          <h2 style={{ fontSize: "1.1rem", margin: "0 0 0.3rem" }}>Done</h2>
-          <p style={{ ...muted, margin: "0 0 0.75rem", lineHeight: 1.5 }}>
-            Reviews whose pull request has since merged or closed — moved here automatically.
+    <>
+      <AppHeader login={session.login} crumbs={[{ label: "Reviews" }]} />
+      <main className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
+        <div className="mb-6">
+          <h1 className="text-2xl font-semibold tracking-tight">Continue reviewing</h1>
+          <p className="mt-1 max-w-xl text-sm leading-relaxed text-muted-foreground">
+            Decks you&apos;ve started but not finished. Your place is saved on every swipe — pick up
+            right where you left off, on any device.
           </p>
-          <ul style={list}>
-            {archived.map((review) => (
+        </div>
+
+        {active.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border bg-card/50 px-6 py-12 text-center">
+            <div className="mx-auto mb-4 grid size-12 place-items-center rounded-full border border-border bg-card text-muted-foreground">
+              <Layers className="size-6" />
+            </div>
+            <p className="font-medium">No reviews in progress</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Swipe through a PR&apos;s deck and your place is saved here.
+            </p>
+          </div>
+        ) : (
+          <ul className="flex flex-col gap-2.5">
+            {active.map((review) => (
               <li key={`${review.owner}/${review.repo}#${review.prNumber}@${review.headSha}`}>
-                <ArchivedRow review={review} />
+                <ReviewRow review={review} />
               </li>
             ))}
           </ul>
-        </section>
-      )}
-    </main>
+        )}
+
+        {archived.length > 0 && (
+          <section className="mt-10">
+            <h2 className="text-lg font-semibold tracking-tight">Done</h2>
+            <p className="mt-1 mb-3 text-sm text-muted-foreground">
+              Reviews whose pull request has since merged or closed — moved here automatically.
+            </p>
+            <ul className="flex flex-col gap-2">
+              {archived.map((review) => (
+                <li key={`${review.owner}/${review.repo}#${review.prNumber}@${review.headSha}`}>
+                  <ArchivedRow review={review} />
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </main>
+    </>
   );
 }
 
 function ReviewRow({ review }: { review: InProgressReview }) {
   const { percent } = deckProgress(review.reviewed, review.total);
   return (
-    <a href={`/pr/${review.owner}/${review.repo}/${review.prNumber}/deck`} style={row}>
-      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-        <span style={{ fontWeight: 600 }}>
+    <a
+      href={`/pr/${review.owner}/${review.repo}/${review.prNumber}/deck`}
+      className="group block rounded-xl border border-border bg-card p-4 transition-colors hover:border-ring/40 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
+    >
+      <div className="flex items-center gap-2">
+        <PlayCircle className="size-4 shrink-0 text-primary" />
+        <span className="truncate font-medium">
           {review.owner}/{review.repo} #{review.prNumber}
         </span>
-        {review.stale && <span style={badge}>Stale</span>}
-      </div>
-
-      <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginTop: "0.5rem" }}>
-        {/* Stretch the shared track across the row with flex; the fill is the brand bar. */}
-        <div style={{ ...progressTrack, flex: 1 }} aria-hidden="true">
-          <div style={{ ...progressFill, width: `${percent}%` }} />
-        </div>
-        <span style={{ ...muted, whiteSpace: "nowrap" }}>
-          {review.reviewed} / {review.total} cards
+        {review.stale && <Badge variant="warning">Stale</Badge>}
+        <span className="ml-auto shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
+          {review.reviewed} / {review.total}
         </span>
       </div>
 
-      <span style={{ ...muted, display: "block", marginTop: "0.35rem" }}>
+      <Progress value={percent} className="mt-3" />
+
+      <p className="mt-2 text-xs text-muted-foreground">
         Updated {relativeTime(review.updatedAt.toISOString())}
         {review.stale ? " · new commits since — a fresh deck will appear once reprocessed" : ""}
-      </span>
+      </p>
     </a>
   );
 }
@@ -112,20 +112,28 @@ function ReviewRow({ review }: { review: InProgressReview }) {
  * (no resume link): the work is done, the badge says how the PR ended.
  */
 function ArchivedRow({ review }: { review: ArchivedReview }) {
-  const label = review.status === "merged" ? "Merged" : "Closed";
+  const merged = review.status === "merged";
+  const label = merged ? "Merged" : "Closed";
   return (
-    <div style={{ ...row, opacity: 0.75 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-        <span style={{ fontWeight: 600 }}>
+    <div className="rounded-xl border border-border bg-card/60 p-4 opacity-80">
+      <div className="flex items-center gap-2">
+        {merged ? (
+          <GitMerge className="size-4 shrink-0 text-[#a78bfa]" />
+        ) : (
+          <XCircle className="size-4 shrink-0 text-muted-foreground" />
+        )}
+        <span className="truncate font-medium">
           {review.owner}/{review.repo} #{review.prNumber}
         </span>
-        <span style={badge}>{label}</span>
+        <Badge variant={merged ? "primary" : "outline"} className="ml-auto gap-1">
+          <CheckCircle2 />
+          {label}
+        </Badge>
       </div>
-
-      <span style={{ ...muted, display: "block", marginTop: "0.35rem" }}>
+      <p className="mt-2 text-xs text-muted-foreground">
         {review.reviewed} / {review.total} cards · {label.toLowerCase()}{" "}
         {relativeTime(review.updatedAt.toISOString())}
-      </span>
+      </p>
     </div>
   );
 }

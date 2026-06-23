@@ -1,8 +1,10 @@
+import { ArrowRight, Building2, FolderGit2, User } from "lucide-react";
 import { redirect } from "next/navigation";
-import { SignOutButton } from "../../components/SignOutButton";
+import { RepoRow } from "../../components/repos/RepoRow";
+import { AppHeader } from "../../components/site/AppHeader";
+import { Badge } from "../../components/ui/badge";
 import { clearSessionRow, requireSession } from "../../lib/auth/session";
 import { GitHubAuthError, type Repository } from "../../lib/github";
-import { badge, list, muted, page, row } from "../../lib/ui";
 
 /**
  * Repo picker (issue #25). Lists the GitHub App installations the signed-in
@@ -59,82 +61,77 @@ export default async function ReposPage() {
     throw err;
   }
 
-  const hasContent = groups.some((group) => group.repos.length > 0 || group.failed);
+  const visible = groups.filter((group) => group.repos.length > 0 || group.failed);
 
   return (
-    <main style={page}>
-      <header
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: "1rem",
-          marginBottom: "1.25rem",
-        }}
-      >
-        <div>
-          <h1 style={{ fontSize: "1.4rem", margin: 0 }}>Your repositories</h1>
-          <p style={{ ...muted, margin: "0.3rem 0 0" }}>Signed in as {session.login}</p>
+    <>
+      <AppHeader login={session.login} crumbs={[{ label: "Repositories" }]} />
+      <main className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">Your repositories</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Pick a repo to see its open pull requests.
+            </p>
+          </div>
           <a
             href="/reviews"
-            style={{
-              color: "#60a5fa",
-              textDecoration: "none",
-              fontWeight: 600,
-              fontSize: "0.9rem",
-            }}
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
           >
-            Continue reviewing →
+            Continue reviewing
+            <ArrowRight className="size-4" />
           </a>
         </div>
-        <SignOutButton variant="pill" />
-      </header>
 
-      {!hasContent ? (
-        <p style={{ opacity: 0.7, lineHeight: 1.5 }}>
-          No repositories yet. Install the diffsense GitHub App on a repository to get started, then
-          refresh.
-        </p>
-      ) : (
-        groups
-          .filter((group) => group.repos.length > 0 || group.failed)
-          .map((group) => (
-            <section key={group.account} style={{ marginBottom: "1.75rem" }}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.5rem",
-                  marginBottom: "0.6rem",
-                }}
-              >
-                <h2 style={{ fontSize: "1rem", margin: 0 }}>{group.account}</h2>
-                <span style={badge}>{group.accountType}</span>
-              </div>
-              {group.failed ? (
-                <p style={{ ...muted, lineHeight: 1.5 }}>
-                  Couldn&apos;t load repositories for this account just now. Try refreshing.
-                </p>
-              ) : (
-                <ul style={list}>
-                  {group.repos.map((repo) => (
-                    <li key={repo.fullName}>
-                      <a href={`/repos/${repo.owner}/${repo.name}/pulls`} style={row}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                          <span style={{ fontWeight: 600 }}>{repo.name}</span>
-                          {repo.private && <span style={badge}>Private</span>}
-                        </div>
-                        <span style={{ ...muted, display: "block", marginTop: "0.2rem" }}>
-                          {repo.fullName}
-                        </span>
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
-          ))
-      )}
-    </main>
+        {visible.length === 0 ? (
+          <EmptyState />
+        ) : (
+          <div className="flex flex-col gap-8">
+            {visible.map((group) => (
+              <section key={group.account}>
+                <div className="mb-3 flex items-center gap-2">
+                  {group.accountType.toLowerCase() === "organization" ? (
+                    <Building2 className="size-4 text-muted-foreground" />
+                  ) : (
+                    <User className="size-4 text-muted-foreground" />
+                  )}
+                  <h2 className="text-sm font-semibold">{group.account}</h2>
+                  <Badge variant="secondary" className="uppercase tracking-wide">
+                    {group.accountType}
+                  </Badge>
+                </div>
+                {group.failed ? (
+                  <p className="rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
+                    Couldn&apos;t load repositories for this account just now. Try refreshing.
+                  </p>
+                ) : (
+                  <ul className="grid gap-2 sm:grid-cols-2">
+                    {group.repos.map((repo) => (
+                      <li key={repo.fullName}>
+                        <RepoRow repo={repo} />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            ))}
+          </div>
+        )}
+      </main>
+    </>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div className="rounded-xl border border-dashed border-border bg-card/50 px-6 py-12 text-center">
+      <div className="mx-auto mb-4 grid size-12 place-items-center rounded-full border border-border bg-card text-muted-foreground">
+        <FolderGit2 className="size-6" />
+      </div>
+      <h2 className="font-medium">No repositories yet</h2>
+      <p className="mx-auto mt-1 max-w-sm text-sm leading-relaxed text-muted-foreground">
+        Install the diffsense GitHub App on a repository to get started, then refresh this page.
+      </p>
+    </div>
   );
 }

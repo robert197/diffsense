@@ -1,4 +1,6 @@
 import { type LanguageCode, SUPPORTED_LANGUAGES } from "@diffsense/core";
+import { Languages } from "lucide-react";
+import { Button } from "../../../../../../components/ui/button";
 import { setLanguage } from "./actions";
 
 /**
@@ -21,56 +23,32 @@ export function LanguagePicker({
   prNumber: number;
 }) {
   return (
-    <form action={setLanguage} style={form}>
+    <form action={setLanguage} className="flex items-center gap-2">
       <input type="hidden" name="owner" value={owner} />
       <input type="hidden" name="repo" value={repo} />
       <input type="hidden" name="prNumber" value={prNumber} />
-      <label htmlFor="df-lang" style={label}>
-        Language
+      <label
+        htmlFor="df-lang"
+        className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"
+      >
+        <Languages className="size-3.5" />
+        <span className="sr-only sm:not-sr-only">Language</span>
       </label>
-      <select id="df-lang" name="lang" defaultValue={current} style={select}>
+      <select
+        id="df-lang"
+        name="lang"
+        defaultValue={current}
+        className="h-9 rounded-md border border-input bg-card px-2.5 text-sm text-foreground transition-colors hover:border-ring/40 focus-visible:border-ring focus-visible:outline-none"
+      >
         {SUPPORTED_LANGUAGES.map((lang) => (
           <option key={lang.code} value={lang.code}>
             {lang.label}
           </option>
         ))}
       </select>
-      <button type="submit" style={button}>
+      <Button type="submit" variant="outline" size="sm">
         Apply
-      </button>
+      </Button>
     </form>
   );
 }
-
-const form: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: "0.5rem",
-  marginTop: "0.75rem",
-};
-
-const label: React.CSSProperties = {
-  fontSize: "0.78rem",
-  opacity: 0.6,
-};
-
-const select: React.CSSProperties = {
-  minHeight: 36,
-  padding: "0.3rem 0.5rem",
-  borderRadius: 8,
-  background: "#11151a",
-  color: "inherit",
-  border: "1px solid #1f2933",
-  fontSize: "0.85rem",
-};
-
-const button: React.CSSProperties = {
-  minHeight: 36,
-  padding: "0.3rem 0.75rem",
-  borderRadius: 8,
-  background: "transparent",
-  color: "inherit",
-  border: "1px solid #374151",
-  fontSize: "0.85rem",
-  cursor: "pointer",
-};
