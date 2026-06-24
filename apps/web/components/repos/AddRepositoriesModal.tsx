@@ -1,7 +1,7 @@
 "use client";
 
-import { Building2, ExternalLink, Loader2, Plus, Search, User } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { Building2, ExternalLink, Loader2, Plus, RefreshCw, Search, User } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { loadAddableRepos } from "../../app/repos/actions";
 import type { AddableGroup, InstallableTarget } from "../../lib/addableRepos";
 import { isOrgAccount } from "../../lib/github";
@@ -25,6 +25,9 @@ import { RepoRow } from "./RepoRow";
  * server-only OAuth token), not on every `/repos` render.
  */
 
+/** Shared empty selection — reused so a reset to "nothing opened" is a no-op re-render. */
+const EMPTY_OPENED: ReadonlySet<string> = new Set();
+
 type LoadState =
   | { status: "idle" }
   | { status: "loading" }
@@ -40,11 +43,25 @@ export function AddRepositoriesModal() {
   const [open, setOpen] = useState(false);
   const [state, setState] = useState<LoadState>({ status: "idle" });
   const [filter, setFilter] = useState("");
+  // Accounts whose Install/Request link the reviewer just opened on GitHub. Local
+  // UI only — it drives the "Opened on GitHub, refresh when done" hint; the real
+  // state change arrives via the refresh on return. Cleared on close.
+  const [opened, setOpened] = useState<ReadonlySet<string>>(EMPTY_OPENED);
   // Guards the async load against itself: `loadingRef` drops a concurrent call
   // (rapid "Try again" clicks); `genRef` invalidates an in-flight load when the
   // dialog closes, so a late response never writes stale state onto a closed modal.
   const loadingRef = useRef(false);
   const genRef = useRef(0);
+  // Mirror of `state.status` for the refocus handler — lets it read the current
+  // status without re-subscribing the listeners on every state change.
+  const statusRef = useRef(state.status);
+  statusRef.current = state.status;
+  // Synchronous mirror of `open`, set in `onOpenChange` before React re-renders or
+  // tears the listeners down. A focus/visibilitychange event landing in that gap
+  // would otherwise pass the (still "loaded") status gate and write fresh state onto
+  // a closed modal — leaving it non-idle so the next open skips its reload. Gating
+  // on this ref closes that window without depending on effect-cleanup timing.
+  const openRef = useRef(open);
 
   const load = useCallback(async () => {
     if (loadingRef.current) {
@@ -77,7 +94,39 @@ export function AddRepositoriesModal() {
     }
   }, []);
 
+  // Refresh on return-to-tab. Installing/requesting opens GitHub in a new tab; when
+  // the reviewer approves and switches back, this re-fetches so a just-synced org and
+  // its (private) repos appear without a manual close/reopen. Gated to a settled
+  // `loaded` view so it doesn't disturb the initial load or the error/"Try again"
+  // path; `load`'s own in-flight guard absorbs rapid focus toggles.
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    function refresh() {
+      if (
+        !openRef.current ||
+        document.visibilityState !== "visible" ||
+        statusRef.current !== "loaded"
+      ) {
+        return;
+      }
+      void load();
+    }
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [open, load]);
+
+  function markOpened(account: string) {
+    setOpened((prev) => new Set(prev).add(account));
+  }
+
   function onOpenChange(next: boolean) {
+    openRef.current = next;
     setOpen(next);
     if (next) {
       // Each open re-fetches fresh so a just-completed GitHub install shows as
@@ -92,6 +141,7 @@ export function AddRepositoriesModal() {
       loadingRef.current = false;
       setState({ status: "idle" });
       setFilter("");
+      setOpened(EMPTY_OPENED);
     }
   }
 
@@ -113,7 +163,14 @@ export function AddRepositoriesModal() {
         </DialogHeader>
 
         <div className="min-h-0 overflow-y-auto">
-          <Body state={state} filter={filter} onFilterChange={setFilter} onRetry={load} />
+          <Body
+            state={state}
+            filter={filter}
+            onFilterChange={setFilter}
+            onReload={load}
+            opened={opened}
+            onOpenTarget={markOpened}
+          />
         </div>
       </DialogContent>
     </Dialog>
@@ -124,12 +181,16 @@ function Body({
   state,
   filter,
   onFilterChange,
-  onRetry,
+  onReload,
+  opened,
+  onOpenTarget,
 }: {
   state: LoadState;
   filter: string;
   onFilterChange: (value: string) => void;
-  onRetry: () => void;
+  onReload: () => void;
+  opened: ReadonlySet<string>;
+  onOpenTarget: (account: string) => void;
 }) {
   if (state.status === "loading" || state.status === "idle") {
     return (
@@ -153,7 +214,7 @@ function Body({
         <p className="text-muted-foreground">Couldn&apos;t load your repositories just now.</p>
         <button
           type="button"
-          onClick={onRetry}
+          onClick={onReload}
           className="mt-2 font-medium text-primary hover:underline"
         >
           Try again
@@ -178,17 +239,25 @@ function Body({
 
   return (
     <div className="flex flex-col gap-4">
-      <label className="relative block">
-        <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-        <input
-          type="text"
-          value={filter}
-          onChange={(e) => onFilterChange(e.target.value)}
-          placeholder="Filter repositories…"
-          aria-label="Filter repositories"
-          className="h-10 w-full rounded-md border border-input bg-transparent pl-9 pr-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-ring"
-        />
-      </label>
+      <div className="flex items-center gap-2">
+        <label className="relative block flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <input
+            type="text"
+            value={filter}
+            onChange={(e) => onFilterChange(e.target.value)}
+            placeholder="Filter repositories…"
+            aria-label="Filter repositories"
+            className="h-10 w-full rounded-md border border-input bg-transparent pl-9 pr-3 text-sm outline-none focus-visible:outline-2 focus-visible:outline-ring"
+          />
+        </label>
+        {/* Manual refresh for when focus events don't fire (e.g. the install
+            completed in a window the reviewer never left). */}
+        <Button type="button" size="sm" variant="outline" onClick={onReload} className="shrink-0">
+          <RefreshCw />
+          Refresh
+        </Button>
+      </div>
 
       {groups.length === 0 ? (
         <p className="py-8 text-center text-sm text-muted-foreground">
@@ -208,6 +277,8 @@ function Body({
         <InstallableTargets
           targets={state.installableTargets}
           installNewUrl={state.installNewUrl}
+          opened={opened}
+          onOpenTarget={onOpenTarget}
         />
       ) : (
         // Fallback when we can't enumerate installable accounts (e.g. /user/orgs
@@ -237,9 +308,13 @@ function Body({
 function InstallableTargets({
   targets,
   installNewUrl,
+  opened,
+  onOpenTarget,
 }: {
   targets: InstallableTarget[];
   installNewUrl: string;
+  opened: ReadonlySet<string>;
+  onOpenTarget: (account: string) => void;
 }) {
   return (
     <section className="border-t border-border/70 pt-4">
@@ -249,24 +324,45 @@ function InstallableTargets({
         you don&apos;t own sends a request to its owners to approve.
       </p>
       <ul className="mt-3 flex flex-col gap-1.5">
-        {targets.map((target) => (
-          <li key={target.account}>
-            <div className="flex min-h-12 items-center gap-3 rounded-lg border border-border bg-card px-3 py-2">
-              {isOrgAccount(target.accountType) ? (
-                <Building2 className="size-4 shrink-0 text-muted-foreground" />
-              ) : (
-                <User className="size-4 shrink-0 text-muted-foreground" />
+        {targets.map((target) => {
+          const isRequest = target.installType === "request";
+          const wasOpened = opened.has(target.account);
+          return (
+            <li key={target.account}>
+              <div className="flex min-h-12 items-center gap-3 rounded-lg border border-border bg-card px-3 py-2">
+                {isOrgAccount(target.accountType) ? (
+                  <Building2 className="size-4 shrink-0 text-muted-foreground" />
+                ) : (
+                  <User className="size-4 shrink-0 text-muted-foreground" />
+                )}
+                <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                  {target.account}
+                </span>
+                <Button size="sm" variant="outline" asChild className="shrink-0">
+                  <a
+                    href={installNewUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => onOpenTarget(target.account)}
+                  >
+                    <Plus />
+                    {isRequest ? "Request access" : "Install"}
+                  </a>
+                </Button>
+              </div>
+              {wasOpened && (
+                // The new GitHub tab is where the actual grant happens; the modal
+                // refreshes on return, so nudge the reviewer back rather than
+                // pretending the org is synced already.
+                <p className="mt-1 pl-1 text-xs text-muted-foreground">
+                  {isRequest
+                    ? "Access requested on GitHub — refresh once an owner approves."
+                    : "Opened on GitHub — refresh once you've finished installing."}
+                </p>
               )}
-              <span className="min-w-0 flex-1 truncate text-sm font-medium">{target.account}</span>
-              <Button size="sm" variant="outline" asChild className="shrink-0">
-                <a href={installNewUrl} target="_blank" rel="noopener noreferrer">
-                  <Plus />
-                  {target.installType === "request" ? "Request access" : "Install"}
-                </a>
-              </Button>
-            </div>
-          </li>
-        ))}
+            </li>
+          );
+        })}
       </ul>
     </section>
   );
