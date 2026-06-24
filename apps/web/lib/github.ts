@@ -1,10 +1,11 @@
 /**
  * Minimal GitHub REST client for the reviewer entry path (issue #25). Bound to a
  * user-to-server access token, it reads the identity, the App installations and
- * repos the user can access, and a repo's open PRs. Plain `fetch` (injectable for
- * tests) instead of Octokit — this slice needs four read calls, and `apps/web`
- * keeps its dependency surface minimal. GitHub is the product's domain, so a
- * GitHub-specific client here does not touch the provider-agnostic (LLM) rule.
+ * their repositories, the user's org memberships, a repo's open PRs / file content /
+ * head SHA, and posts one comment. Plain `fetch` (injectable for tests) instead of
+ * Octokit — `apps/web` keeps its dependency surface minimal. GitHub is the product's
+ * domain, so a GitHub-specific client here does not touch the provider-agnostic
+ * (LLM) rule.
  */
 
 import type {
@@ -71,16 +72,22 @@ export interface Installation {
   account: string;
   avatarUrl: string | null;
   accountType: string;
+  /** `"all"` repos in the account, or only a `"selected"` subset. */
+  repositorySelection: "all" | "selected";
+  /** GitHub's configure page for this installation (add/remove repos), or `null`. */
+  configureUrl: string | null;
 }
 
 /**
- * An organisation the signed-in user belongs to. Backs the add-repositories modal's
- * "install on this org" cards — orgs are install *targets* even when the App can't
- * yet see their repos (a GitHub App user token only surfaces repos in accounts the
- * App is already reachable on).
+ * An organisation membership of the signed-in user (`GET /user/memberships/orgs`).
+ * `role` decides whether they can install the App directly (`admin`) or only
+ * *request* it from the org's owners (`member`). Backs the add-repositories modal's
+ * Install/Request cards for orgs that don't yet have diffsense.
  */
-export interface Organization {
+export interface OrgMembership {
   login: string;
+  role: "admin" | "member";
+  state: string;
 }
 
 /**
@@ -95,12 +102,6 @@ export function isOrgAccount(accountType: string): boolean {
 
 export interface Repository {
   owner: string;
-  /**
-   * The owner account's numeric id (user or org). Used to build a per-account
-   * GitHub App install link (`?target_id=`) for repos diffsense isn't yet on.
-   * `null` when GitHub omitted it.
-   */
-  ownerId: number | null;
   name: string;
   fullName: string;
   private: boolean;
@@ -127,19 +128,11 @@ export interface GitHubClient extends GitHubGateway {
   listInstallations(): Promise<Installation[]>;
   listInstallationRepositories(installationId: number): Promise<Repository[]>;
   /**
-   * Every repository the signed-in user can access — repos they own plus repos in
-   * organisations they belong to — independent of whether diffsense is installed on
-   * them. Backs the "Add repositories" modal's browse list (the user picks one, then
-   * grants the App access on GitHub). `listInstallationRepositories` returns only the
-   * *installed* subset; this returns the full reachable set.
+   * The organisations the signed-in user belongs to, with their role
+   * (`GET /user/memberships/orgs`). Used to offer install/request targets in the
+   * add-repositories modal: admins can install, members can only request.
    */
-  listAccessibleRepositories(): Promise<Repository[]>;
-  /**
-   * The organisations the signed-in user belongs to (`GET /user/orgs`). Used to
-   * offer them as App-install targets in the add-repositories modal — independent
-   * of whether diffsense is installed on them.
-   */
-  listUserOrganizations(): Promise<Organization[]>;
+  listUserMemberships(): Promise<OrgMembership[]>;
   listOpenPullRequests(owner: string, repo: string): Promise<PullRequest[]>;
   /**
    * Raw text of a file at a specific commit, or `null` when it cannot be shown as
@@ -266,27 +259,13 @@ export function createGitHubClient(
       return out;
     },
 
-    async listAccessibleRepositories(): Promise<Repository[]> {
-      const out: Repository[] = [];
+    async listUserMemberships(): Promise<OrgMembership[]> {
+      const out: OrgMembership[] = [];
       for (let page = 1; page <= MAX_PAGES; page++) {
         const items = asArray(
-          await get(
-            `/user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&direction=desc&per_page=${PER_PAGE}&page=${page}`,
-          ),
+          await get(`/user/memberships/orgs?per_page=${PER_PAGE}&page=${page}`),
         );
-        out.push(...items.map(mapRepository));
-        if (items.length < PER_PAGE) {
-          break;
-        }
-      }
-      return out;
-    },
-
-    async listUserOrganizations(): Promise<Organization[]> {
-      const out: Organization[] = [];
-      for (let page = 1; page <= MAX_PAGES; page++) {
-        const items = asArray(await get(`/user/orgs?per_page=${PER_PAGE}&page=${page}`));
-        out.push(...items.map(mapOrganization));
+        out.push(...items.map(mapMembership));
         if (items.length < PER_PAGE) {
           break;
         }
@@ -492,11 +471,19 @@ function mapInstallation(raw: unknown): Installation {
     account: String(account.login ?? ""),
     avatarUrl: typeof account.avatar_url === "string" ? account.avatar_url : null,
     accountType: String(account.type ?? "User"),
+    repositorySelection: data.repository_selection === "selected" ? "selected" : "all",
+    configureUrl: typeof data.html_url === "string" ? data.html_url : null,
   };
 }
 
-function mapOrganization(raw: unknown): Organization {
-  return { login: String(asRecord(raw).login ?? "") };
+function mapMembership(raw: unknown): OrgMembership {
+  const data = asRecord(raw);
+  const org = asRecord(data.organization);
+  return {
+    login: String(org.login ?? ""),
+    role: data.role === "admin" ? "admin" : "member",
+    state: String(data.state ?? ""),
+  };
 }
 
 function mapRepository(raw: unknown): Repository {
@@ -504,7 +491,6 @@ function mapRepository(raw: unknown): Repository {
   const owner = asRecord(data.owner);
   return {
     owner: String(owner.login ?? ""),
-    ownerId: Number.isInteger(Number(owner.id)) ? Number(owner.id) : null,
     name: String(data.name ?? ""),
     fullName: String(data.full_name ?? ""),
     private: Boolean(data.private),

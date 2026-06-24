@@ -1,21 +1,10 @@
 "use client";
 
-import {
-  ArrowRight,
-  Building2,
-  ExternalLink,
-  FolderGit2,
-  Loader2,
-  Lock,
-  Plus,
-  Search,
-  User,
-} from "lucide-react";
+import { Building2, ExternalLink, Loader2, Plus, Search, User } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { loadAddableRepos } from "../../app/repos/actions";
 import type { AddableGroup, InstallableTarget } from "../../lib/addableRepos";
 import { isOrgAccount } from "../../lib/github";
-import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -25,6 +14,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "../ui/dialog";
+import { RepoRow } from "./RepoRow";
 
 /**
  * "Add repositories" button + modal. Adding a repo to diffsense means installing
@@ -203,7 +193,7 @@ function Body({
       {groups.length === 0 ? (
         <p className="py-8 text-center text-sm text-muted-foreground">
           {state.groups.length === 0
-            ? "No repositories found for your account."
+            ? "diffsense isn't installed on any of your accounts yet. Add one below to start reviewing its repositories."
             : "No repositories match your filter."}
         </p>
       ) : (
@@ -271,7 +261,7 @@ function InstallableTargets({
               <Button size="sm" variant="outline" asChild className="shrink-0">
                 <a href={installNewUrl} target="_blank" rel="noopener noreferrer">
                   <Plus />
-                  Install
+                  {target.installType === "request" ? "Request access" : "Install"}
                 </a>
               </Button>
             </div>
@@ -282,6 +272,12 @@ function InstallableTargets({
   );
 }
 
+/**
+ * One installed account and the repos diffsense can review there (private included).
+ * Every repo is reviewable — it's listed because the App is installed on it — so each
+ * row links straight to its PRs. A `selected`-repos install also offers a link to
+ * GitHub's configure page so the reviewer can add more repos to the selection.
+ */
 function AccountGroup({ group }: { group: AddableGroup }) {
   const isOrg = isOrgAccount(group.accountType);
   return (
@@ -295,50 +291,22 @@ function AccountGroup({ group }: { group: AddableGroup }) {
           )}
           <h3 className="text-sm font-semibold">{group.account}</h3>
         </div>
-        <a
-          href={group.installUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-        >
-          Configure on GitHub
-          <ExternalLink className="size-3" />
-        </a>
+        {group.manageUrl && (
+          <a
+            href={group.manageUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+          >
+            Manage repositories on GitHub
+            <ExternalLink className="size-3" />
+          </a>
+        )}
       </div>
       <ul className="flex flex-col gap-1.5">
         {group.repos.map((repo) => (
           <li key={repo.fullName}>
-            <div className="flex min-h-12 items-center gap-3 rounded-lg border border-border bg-card px-3 py-2">
-              <FolderGit2 className="size-4 shrink-0 text-muted-foreground" />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="truncate text-sm font-medium">{repo.name}</span>
-                  {repo.private && (
-                    <Badge variant="outline" className="gap-1">
-                      <Lock />
-                      Private
-                    </Badge>
-                  )}
-                </div>
-                <p className="truncate text-xs text-muted-foreground">{repo.fullName}</p>
-              </div>
-              {repo.added ? (
-                <a
-                  href={`/repos/${repo.owner}/${repo.name}/pulls`}
-                  className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-                >
-                  Added
-                  <ArrowRight className="size-3" />
-                </a>
-              ) : (
-                <Button size="sm" variant="outline" asChild className="shrink-0">
-                  <a href={group.installUrl} target="_blank" rel="noopener noreferrer">
-                    <Plus />
-                    Add
-                  </a>
-                </Button>
-              )}
-            </div>
+            <RepoRow repo={repo} />
           </li>
         ))}
       </ul>
