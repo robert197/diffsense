@@ -124,4 +124,31 @@ describe("AddRepositoriesModal", () => {
       "https://github.com/apps/diffsense/installations/new",
     );
   });
+
+  it("shows an unknown-error state and re-fetches when Try again is clicked", async () => {
+    loadAddableRepos.mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce(LOADED);
+    render(<AddRepositoriesModal />);
+    openModal();
+
+    const retry = await screen.findByRole("button", { name: /try again/i });
+    expect(screen.getByText(/couldn.t load/i)).toBeTruthy();
+
+    fireEvent.click(retry);
+    await screen.findByText("acme/fresh");
+    expect(loadAddableRepos).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-fetches on reopen so a just-completed install is reflected", async () => {
+    loadAddableRepos.mockResolvedValue(LOADED);
+    render(<AddRepositoriesModal />);
+    openModal();
+    await screen.findByText("acme/fresh");
+    expect(loadAddableRepos).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: /close/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    openModal();
+    await waitFor(() => expect(loadAddableRepos).toHaveBeenCalledTimes(2));
+  });
 });

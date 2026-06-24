@@ -11,9 +11,10 @@ import {
   Search,
   User,
 } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { loadAddableRepos } from "../../app/repos/actions";
-import type { AddableGroup, AddableReposResult } from "../../lib/addableRepos";
+import type { AddableGroup } from "../../lib/addableRepos";
+import { isOrgAccount } from "../../lib/github";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
@@ -44,27 +45,53 @@ export function AddRepositoriesModal() {
   const [open, setOpen] = useState(false);
   const [state, setState] = useState<LoadState>({ status: "idle" });
   const [filter, setFilter] = useState("");
+  // Guards the async load against itself: `loadingRef` drops a concurrent call
+  // (rapid "Try again" clicks); `genRef` invalidates an in-flight load when the
+  // dialog closes, so a late response never writes stale state onto a closed modal.
+  const loadingRef = useRef(false);
+  const genRef = useRef(0);
 
-  async function load() {
+  const load = useCallback(async () => {
+    if (loadingRef.current) {
+      return;
+    }
+    loadingRef.current = true;
+    const gen = genRef.current;
     setState({ status: "loading" });
     try {
-      const result: AddableReposResult = await loadAddableRepos();
-      if ("error" in result) {
-        setState({ status: "error", kind: "reauth" });
-        return;
+      const result = await loadAddableRepos();
+      if (gen !== genRef.current) {
+        return; // dialog closed / reset while loading — discard the result
       }
-      setState({ status: "loaded", groups: result.groups, installNewUrl: result.installNewUrl });
+      setState(
+        "error" in result
+          ? { status: "error", kind: "reauth" }
+          : { status: "loaded", groups: result.groups, installNewUrl: result.installNewUrl },
+      );
     } catch {
-      setState({ status: "error", kind: "unknown" });
+      if (gen === genRef.current) {
+        setState({ status: "error", kind: "unknown" });
+      }
+    } finally {
+      loadingRef.current = false;
     }
-  }
+  }, []);
 
   function onOpenChange(next: boolean) {
     setOpen(next);
-    // Load once on first open; keep the result across reopens (a refresh of the
-    // page picks up newly-installed repos, so a stale-on-reopen list is acceptable).
-    if (next && state.status === "idle") {
-      void load();
+    if (next) {
+      // Each open re-fetches fresh so a just-completed GitHub install shows as
+      // "Added"; the idle guard means an already-running load isn't duplicated.
+      if (state.status === "idle") {
+        void load();
+      }
+    } else {
+      // Reset on close: invalidate any in-flight load, drop stale results, and
+      // clear the filter so the next open starts clean.
+      genRef.current += 1;
+      loadingRef.current = false;
+      setState({ status: "idle" });
+      setFilter("");
     }
   }
 
@@ -193,7 +220,7 @@ function Body({
 }
 
 function AccountGroup({ group }: { group: AddableGroup }) {
-  const isOrg = group.accountType.toLowerCase() === "organization";
+  const isOrg = isOrgAccount(group.accountType);
   return (
     <section>
       <div className="mb-2 flex items-center justify-between gap-2">

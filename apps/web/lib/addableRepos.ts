@@ -10,15 +10,8 @@
 import type { Installation, Repository } from "./github";
 import { buildInstallUrl } from "./githubApp";
 
-export interface AddableRepo {
-  owner: string;
-  name: string;
-  fullName: string;
-  private: boolean;
-  pushedAt: string | null;
-  /** True when diffsense's GitHub App is already installed on this repo. */
-  added: boolean;
-}
+/** A reachable repo plus whether diffsense is already installed on it. */
+export type AddableRepo = Omit<Repository, "ownerId"> & { added: boolean };
 
 export interface AddableGroup {
   account: string;
@@ -52,31 +45,28 @@ export function buildAddableGroups(
     installByAccount.set(installation.account.toLowerCase(), installation);
   }
 
-  const byOwner = new Map<string, { ownerId: number | null; repos: AddableRepo[] }>();
+  const byOwner = new Map<
+    string,
+    { account: string; ownerId: number | null; repos: AddableRepo[] }
+  >();
   for (const repo of accessible) {
     const key = repo.owner.toLowerCase();
     let bucket = byOwner.get(key);
     if (!bucket) {
-      bucket = { ownerId: repo.ownerId, repos: [] };
+      bucket = { account: repo.owner, ownerId: repo.ownerId, repos: [] };
       byOwner.set(key, bucket);
     }
     // Prefer the first non-null ownerId seen for the account (for the install URL).
     if (bucket.ownerId === null && repo.ownerId !== null) {
       bucket.ownerId = repo.ownerId;
     }
-    bucket.repos.push({
-      owner: repo.owner,
-      name: repo.name,
-      fullName: repo.fullName,
-      private: repo.private,
-      pushedAt: repo.pushedAt,
-      added: installedFullNames.has(repo.fullName),
-    });
+    const { ownerId, ...repoFields } = repo;
+    bucket.repos.push({ ...repoFields, added: installedFullNames.has(repo.fullName) });
   }
 
   const groups: AddableGroup[] = [];
   for (const bucket of byOwner.values()) {
-    const account = bucket.repos[0]?.owner ?? "";
+    const account = bucket.account;
     const installation = installByAccount.get(account.toLowerCase());
     bucket.repos.sort(compareRepos);
     groups.push({

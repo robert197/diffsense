@@ -5,7 +5,7 @@ import { RepoRow } from "../../components/repos/RepoRow";
 import { AppHeader } from "../../components/site/AppHeader";
 import { Badge } from "../../components/ui/badge";
 import { clearSessionRow, requireSession } from "../../lib/auth/session";
-import { GitHubAuthError, type Repository } from "../../lib/github";
+import { GitHubAuthError, type Repository, isOrgAccount } from "../../lib/github";
 
 /**
  * Repo picker (issue #25). Lists the GitHub App installations the signed-in
@@ -94,7 +94,7 @@ export default async function ReposPage() {
             {visible.map((group) => (
               <section key={group.account}>
                 <div className="mb-3 flex items-center gap-2">
-                  {group.accountType.toLowerCase() === "organization" ? (
+                  {isOrgAccount(group.accountType) ? (
                     <Building2 className="size-4 text-muted-foreground" />
                   ) : (
                     <User className="size-4 text-muted-foreground" />

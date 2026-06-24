@@ -73,6 +73,16 @@ export interface Installation {
   accountType: string;
 }
 
+/**
+ * Whether an account is a GitHub organisation (vs a personal user). GitHub's
+ * `account.type` is a free string (`"Organization"` / `"User"`); centralise the
+ * comparison so the repo picker and the add-repositories modal can't drift on
+ * casing or the literal.
+ */
+export function isOrgAccount(accountType: string): boolean {
+  return accountType.toLowerCase() === "organization";
+}
+
 export interface Repository {
   owner: string;
   /**

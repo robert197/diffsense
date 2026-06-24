@@ -2,7 +2,7 @@
 
 import { type AddableReposResult, buildAddableGroups } from "../../lib/addableRepos";
 import { getSession } from "../../lib/auth/session";
-import { GitHubAuthError } from "../../lib/github";
+import { GitHubAuthError, GitHubRateLimitError } from "../../lib/github";
 import { appSlug, buildInstallUrl } from "../../lib/githubApp";
 
 /**
@@ -22,22 +22,29 @@ export async function loadAddableRepos(): Promise<AddableReposResult> {
   }
 
   try {
-    const installations = await session.github.listInstallations();
-    const [accessible, ...installedLists] = await Promise.all([
+    // The installation list and the full accessible set are independent reads —
+    // fetch them together so the first modal open isn't serialised.
+    const [installations, accessible] = await Promise.all([
+      session.github.listInstallations(),
       session.github.listAccessibleRepositories(),
-      ...installations.map((installation) =>
-        // Per-installation failures must not sink the whole modal: a non-auth
-        // failure for one account just means its repos aren't marked "added".
+    ]);
+    const installedLists = await Promise.all(
+      installations.map((installation) =>
+        // Per-installation failures must not sink the whole modal: a transient
+        // non-auth failure for one account just means its repos aren't marked
+        // "added". A rate-limit, though, would mis-mark every repo in that account
+        // as not-added — a wrong signal — so re-throw it (like auth) to surface a
+        // retry rather than silently showing "Add" on already-installed repos.
         session.github
           .listInstallationRepositories(installation.id)
           .catch((err) => {
-            if (err instanceof GitHubAuthError) {
+            if (err instanceof GitHubAuthError || err instanceof GitHubRateLimitError) {
               throw err;
             }
             return [];
           }),
       ),
-    ]);
+    );
 
     const installedFullNames = new Set<string>();
     for (const list of installedLists) {

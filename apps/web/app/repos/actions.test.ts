@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GitHubAuthError, type GitHubClient, type Repository } from "../../lib/github";
+import {
+  GitHubAuthError,
+  type GitHubClient,
+  GitHubRateLimitError,
+  type Repository,
+} from "../../lib/github";
 
 // The action re-checks the session itself; mock it so we can drive auth states.
 const getSession = vi.fn();
@@ -81,6 +86,47 @@ describe("loadAddableRepos", () => {
     const result = await loadAddableRepos();
     if ("error" in result) throw new Error("expected groups");
     expect(result.groups[0].repos[0].added).toBe(false);
+  });
+
+  it("returns { error: 'reauth' } when listInstallations hits a 401", async () => {
+    const github = fakeClient({
+      listInstallations: vi.fn(async () => {
+        throw new GitHubAuthError();
+      }),
+    });
+    getSession.mockResolvedValue({ github });
+
+    expect(await loadAddableRepos()).toEqual({ error: "reauth" });
+  });
+
+  it("returns { error: 'reauth' } when a per-installation fetch hits a 401", async () => {
+    const github = fakeClient({
+      listInstallations: vi.fn(async () => [
+        { id: 7, account: "acme", avatarUrl: null, accountType: "Organization" },
+      ]),
+      listAccessibleRepositories: vi.fn(async () => [repo({ fullName: "acme/web" })]),
+      listInstallationRepositories: vi.fn(async () => {
+        throw new GitHubAuthError();
+      }),
+    });
+    getSession.mockResolvedValue({ github });
+
+    expect(await loadAddableRepos()).toEqual({ error: "reauth" });
+  });
+
+  it("propagates a per-installation rate-limit instead of silently marking repos not-added", async () => {
+    const github = fakeClient({
+      listInstallations: vi.fn(async () => [
+        { id: 7, account: "acme", avatarUrl: null, accountType: "Organization" },
+      ]),
+      listAccessibleRepositories: vi.fn(async () => [repo({ fullName: "acme/web" })]),
+      listInstallationRepositories: vi.fn(async () => {
+        throw new GitHubRateLimitError();
+      }),
+    });
+    getSession.mockResolvedValue({ github });
+
+    await expect(loadAddableRepos()).rejects.toBeInstanceOf(GitHubRateLimitError);
   });
 
   it("returns { error: 'reauth' } when listing accessible repos hits a 401", async () => {
