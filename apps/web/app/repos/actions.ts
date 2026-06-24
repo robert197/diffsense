@@ -1,8 +1,12 @@
 "use server";
 
-import { type AddableReposResult, buildAddableGroups } from "../../lib/addableRepos";
+import {
+  type AddableReposResult,
+  buildAddableGroups,
+  computeInstallableTargets,
+} from "../../lib/addableRepos";
 import { getSession } from "../../lib/auth/session";
-import { GitHubAuthError, GitHubRateLimitError } from "../../lib/github";
+import { GitHubAuthError, GitHubRateLimitError, type Organization } from "../../lib/github";
 import { appSlug, buildInstallUrl } from "../../lib/githubApp";
 
 /**
@@ -22,11 +26,20 @@ export async function loadAddableRepos(): Promise<AddableReposResult> {
   }
 
   try {
-    // The installation list and the full accessible set are independent reads —
-    // fetch them together so the first modal open isn't serialised.
-    const [installations, accessible] = await Promise.all([
+    // The installation list, the full accessible set, and the user's orgs are
+    // independent reads — fetch them together so the first modal open isn't
+    // serialised. Org listing degrades gracefully: a GitHub-App user token may lack
+    // org-membership read, so a non-auth failure just means no install cards (the
+    // generic footer link remains). A 401 still re-surfaces as reauth.
+    const [installations, accessible, orgs] = await Promise.all([
       session.github.listInstallations(),
       session.github.listAccessibleRepositories(),
+      session.github.listUserOrganizations().catch((err): Organization[] => {
+        if (err instanceof GitHubAuthError) {
+          throw err;
+        }
+        return [];
+      }),
     ]);
     const installedLists = await Promise.all(
       installations.map((installation) =>
@@ -56,6 +69,7 @@ export async function loadAddableRepos(): Promise<AddableReposResult> {
     const slug = appSlug();
     return {
       groups: buildAddableGroups(accessible, installedFullNames, installations, slug),
+      installableTargets: computeInstallableTargets(orgs, session.login, installations),
       installNewUrl: buildInstallUrl(slug),
     };
   } catch (err) {

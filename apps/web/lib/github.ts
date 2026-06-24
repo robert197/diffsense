@@ -74,6 +74,16 @@ export interface Installation {
 }
 
 /**
+ * An organisation the signed-in user belongs to. Backs the add-repositories modal's
+ * "install on this org" cards — orgs are install *targets* even when the App can't
+ * yet see their repos (a GitHub App user token only surfaces repos in accounts the
+ * App is already reachable on).
+ */
+export interface Organization {
+  login: string;
+}
+
+/**
  * Whether an account is a GitHub organisation (vs a personal user). GitHub's
  * `account.type` is a free string (`"Organization"` / `"User"`); centralise the
  * comparison so the repo picker and the add-repositories modal can't drift on
@@ -124,6 +134,12 @@ export interface GitHubClient extends GitHubGateway {
    * *installed* subset; this returns the full reachable set.
    */
   listAccessibleRepositories(): Promise<Repository[]>;
+  /**
+   * The organisations the signed-in user belongs to (`GET /user/orgs`). Used to
+   * offer them as App-install targets in the add-repositories modal — independent
+   * of whether diffsense is installed on them.
+   */
+  listUserOrganizations(): Promise<Organization[]>;
   listOpenPullRequests(owner: string, repo: string): Promise<PullRequest[]>;
   /**
    * Raw text of a file at a specific commit, or `null` when it cannot be shown as
@@ -259,6 +275,18 @@ export function createGitHubClient(
           ),
         );
         out.push(...items.map(mapRepository));
+        if (items.length < PER_PAGE) {
+          break;
+        }
+      }
+      return out;
+    },
+
+    async listUserOrganizations(): Promise<Organization[]> {
+      const out: Organization[] = [];
+      for (let page = 1; page <= MAX_PAGES; page++) {
+        const items = asArray(await get(`/user/orgs?per_page=${PER_PAGE}&page=${page}`));
+        out.push(...items.map(mapOrganization));
         if (items.length < PER_PAGE) {
           break;
         }
@@ -465,6 +493,10 @@ function mapInstallation(raw: unknown): Installation {
     avatarUrl: typeof account.avatar_url === "string" ? account.avatar_url : null,
     accountType: String(account.type ?? "User"),
   };
+}
+
+function mapOrganization(raw: unknown): Organization {
+  return { login: String(asRecord(raw).login ?? "") };
 }
 
 function mapRepository(raw: unknown): Repository {

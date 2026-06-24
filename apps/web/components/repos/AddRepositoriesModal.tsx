@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { loadAddableRepos } from "../../app/repos/actions";
-import type { AddableGroup } from "../../lib/addableRepos";
+import type { AddableGroup, InstallableTarget } from "../../lib/addableRepos";
 import { isOrgAccount } from "../../lib/github";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -38,7 +38,12 @@ import {
 type LoadState =
   | { status: "idle" }
   | { status: "loading" }
-  | { status: "loaded"; groups: AddableGroup[]; installNewUrl: string }
+  | {
+      status: "loaded";
+      groups: AddableGroup[];
+      installableTargets: InstallableTarget[];
+      installNewUrl: string;
+    }
   | { status: "error"; kind: "reauth" | "unknown" };
 
 export function AddRepositoriesModal() {
@@ -66,7 +71,12 @@ export function AddRepositoriesModal() {
       setState(
         "error" in result
           ? { status: "error", kind: "reauth" }
-          : { status: "loaded", groups: result.groups, installNewUrl: result.installNewUrl },
+          : {
+              status: "loaded",
+              groups: result.groups,
+              installableTargets: result.installableTargets,
+              installNewUrl: result.installNewUrl,
+            },
       );
     } catch {
       if (gen === genRef.current) {
@@ -204,18 +214,71 @@ function Body({
         </div>
       )}
 
-      <div className="border-t border-border/70 pt-3">
-        <a
-          href={state.installNewUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
-        >
-          <ExternalLink className="size-3.5" />
-          Install on another account
-        </a>
-      </div>
+      {state.installableTargets.length > 0 ? (
+        <InstallableTargets
+          targets={state.installableTargets}
+          installNewUrl={state.installNewUrl}
+        />
+      ) : (
+        // Fallback when we can't enumerate installable accounts (e.g. /user/orgs
+        // unreadable): the canonical install page still lists them on GitHub.
+        <div className="border-t border-border/70 pt-3">
+          <a
+            href={state.installNewUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+          >
+            <ExternalLink className="size-3.5" />
+            Install on another account
+          </a>
+        </div>
+      )}
     </div>
+  );
+}
+
+/**
+ * Accounts the reviewer can switch diffsense on but hasn't yet — their orgs and
+ * personal account without an installation. A GitHub App user token can't list an
+ * org's repos until the App is installed there, so this is how org repos (e.g.
+ * devs-group/core-gent) become reachable: install on the org, then its repos appear.
+ */
+function InstallableTargets({
+  targets,
+  installNewUrl,
+}: {
+  targets: InstallableTarget[];
+  installNewUrl: string;
+}) {
+  return (
+    <section className="border-t border-border/70 pt-4">
+      <h3 className="text-sm font-semibold">Add an organisation or account</h3>
+      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+        Install diffsense on one of these to review its repositories. Installing on an organisation
+        you don&apos;t own sends a request to its owners to approve.
+      </p>
+      <ul className="mt-3 flex flex-col gap-1.5">
+        {targets.map((target) => (
+          <li key={target.account}>
+            <div className="flex min-h-12 items-center gap-3 rounded-lg border border-border bg-card px-3 py-2">
+              {isOrgAccount(target.accountType) ? (
+                <Building2 className="size-4 shrink-0 text-muted-foreground" />
+              ) : (
+                <User className="size-4 shrink-0 text-muted-foreground" />
+              )}
+              <span className="min-w-0 flex-1 truncate text-sm font-medium">{target.account}</span>
+              <Button size="sm" variant="outline" asChild className="shrink-0">
+                <a href={installNewUrl} target="_blank" rel="noopener noreferrer">
+                  <Plus />
+                  Install
+                </a>
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
