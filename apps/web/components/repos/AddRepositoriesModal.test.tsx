@@ -14,6 +14,7 @@ import { AddRepositoriesModal } from "./AddRepositoriesModal";
 
 const LOADED: AddableReposResult = {
   installNewUrl: "https://github.com/apps/diffsense/installations/new",
+  installableTargets: [{ account: "devs-group", accountType: "Organization" }],
   groups: [
     {
       account: "acme",
@@ -115,6 +116,7 @@ describe("AddRepositoriesModal", () => {
   it("shows an empty state with the install-on-another-account link", async () => {
     loadAddableRepos.mockResolvedValue({
       groups: [],
+      installableTargets: [],
       installNewUrl: "https://github.com/apps/diffsense/installations/new",
     });
     render(<AddRepositoriesModal />);
@@ -138,6 +140,33 @@ describe("AddRepositoriesModal", () => {
     fireEvent.click(retry);
     await screen.findByText("acme/fresh");
     expect(loadAddableRepos).toHaveBeenCalledTimes(2);
+  });
+
+  it("renders an Install card per installable org with the canonical install URL + owner-approval note", async () => {
+    loadAddableRepos.mockResolvedValue(LOADED);
+    render(<AddRepositoriesModal />);
+    openModal();
+    await screen.findByText("devs-group");
+
+    expect(screen.getByText(/add an organisation or account/i)).toBeTruthy();
+    expect(screen.getByText(/sends a request to its owners to approve/i)).toBeTruthy();
+
+    const installLink = screen.getByRole("link", { name: /^install$/i });
+    expect(installLink.getAttribute("href")).toBe(
+      "https://github.com/apps/diffsense/installations/new",
+    );
+    expect(installLink.getAttribute("target")).toBe("_blank");
+  });
+
+  it("omits the installable-accounts section when there are none", async () => {
+    loadAddableRepos.mockResolvedValue({ ...LOADED, installableTargets: [] });
+    render(<AddRepositoriesModal />);
+    openModal();
+    await screen.findByText("acme/fresh");
+
+    expect(screen.queryByText(/add an organisation or account/i)).toBeNull();
+    // The generic footer link still renders as the fallback.
+    expect(screen.getByRole("link", { name: /install on another account/i })).toBeTruthy();
   });
 
   it("re-fetches on reopen so a just-completed install is reflected", async () => {

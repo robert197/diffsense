@@ -300,6 +300,67 @@ describe("createGitHubClient", () => {
     const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
     await expect(client.listAccessibleRepositories()).rejects.toBeInstanceOf(GitHubRateLimitError);
   });
+
+  it("lists the user's organisations from /user/orgs and maps login/id/avatar", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse([
+        { login: "devs-group", id: 48035703, avatar_url: "https://a/dg.png" },
+        { login: "acme", id: 7, avatar_url: null },
+      ]),
+    );
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    const orgs = await client.listUserOrganizations();
+
+    expect(fetchImpl.mock.calls[0][0]).toContain("/user/orgs");
+    expect(orgs).toEqual([
+      { login: "devs-group", id: 48035703, avatarUrl: "https://a/dg.png" },
+      { login: "acme", id: 7, avatarUrl: null },
+    ]);
+  });
+
+  it("paginates organisations across pages and stops on a short page", async () => {
+    const orgPage = (n: number, offset = 0) =>
+      Array.from({ length: n }, (_, i) => ({ login: `o${offset + i}`, id: offset + i }));
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(orgPage(100)))
+      .mockResolvedValueOnce(jsonResponse(orgPage(2, 100)));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    const orgs = await client.listUserOrganizations();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(orgs).toHaveLength(102);
+  });
+
+  it("stops paginating organisations at the MAX_PAGES cap", async () => {
+    const fullPage = Array.from({ length: 100 }, (_, i) => ({ login: `o${i}`, id: i }));
+    const fetchImpl = vi.fn(async () => jsonResponse(fullPage));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    const orgs = await client.listUserOrganizations();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
+    expect(orgs).toHaveLength(500);
+  });
+
+  it("returns an empty list when the user belongs to no organisations", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse([]));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    expect(await client.listUserOrganizations()).toEqual([]);
+  });
+
+  it("throws GitHubAuthError on 401 listing organisations", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ message: "Bad credentials" }, 401));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    await expect(client.listUserOrganizations()).rejects.toBeInstanceOf(GitHubAuthError);
+  });
+
+  it("throws GitHubRateLimitError on a rate-limited 403 listing organisations", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ message: "rate limit" }, 403, { "x-ratelimit-remaining": "0" }),
+    );
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    await expect(client.listUserOrganizations()).rejects.toBeInstanceOf(GitHubRateLimitError);
+  });
 });
 
 function textResponse(body: string, status = 200, headers: Record<string, string> = {}): Response {

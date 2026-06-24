@@ -7,7 +7,7 @@
  * unit-testable without a session or network; the `"use server"` action wraps it.
  */
 
-import type { Installation, Repository } from "./github";
+import type { Installation, Organization, Repository } from "./github";
 import { buildInstallUrl } from "./githubApp";
 
 /** A reachable repo plus whether diffsense is already installed on it. */
@@ -22,9 +22,52 @@ export interface AddableGroup {
   repos: AddableRepo[];
 }
 
+/**
+ * An account (org or the user's own) the reviewer can onboard but that does NOT yet
+ * have diffsense installed. Surfaced as an "Install on <account>" card so org repos
+ * become reachable — a GitHub App user token can't list an org's repos until the App
+ * is installed there.
+ */
+export interface InstallableTarget {
+  account: string;
+  /** `"Organization"` or `"User"`. */
+  accountType: string;
+}
+
 export type AddableReposResult =
-  | { groups: AddableGroup[]; installNewUrl: string }
+  | { groups: AddableGroup[]; installableTargets: InstallableTarget[]; installNewUrl: string }
   | { error: "reauth" };
+
+/**
+ * Accounts the reviewer can install diffsense on but hasn't yet: their orgs plus
+ * their personal account, minus any account that already has an installation
+ * (case-insensitive). Sorted alphabetically. Pure — no I/O.
+ */
+export function computeInstallableTargets(
+  orgs: Organization[],
+  personalLogin: string,
+  installations: Installation[],
+): InstallableTarget[] {
+  const installed = new Set(installations.map((i) => i.account.toLowerCase()));
+  const candidates: InstallableTarget[] = [
+    ...orgs.map((o) => ({ account: o.login, accountType: "Organization" })),
+    { account: personalLogin, accountType: "User" },
+  ];
+  const seen = new Set<string>();
+  const out: InstallableTarget[] = [];
+  for (const c of candidates) {
+    if (!c.account) {
+      continue;
+    }
+    const key = c.account.toLowerCase();
+    if (installed.has(key) || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(c);
+  }
+  return out.sort((a, b) => a.account.localeCompare(b.account));
+}
 
 /**
  * Group accessible repos by owner account, mark each `added`, and resolve a

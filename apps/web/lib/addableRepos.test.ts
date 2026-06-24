@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildAddableGroups } from "./addableRepos";
-import type { Installation, Repository } from "./github";
+import { buildAddableGroups, computeInstallableTargets } from "./addableRepos";
+import type { Installation, Organization, Repository } from "./github";
+
+function org(login: string, id = 1): Organization {
+  return { login, id, avatarUrl: null };
+}
 
 function repo(over: Partial<Repository> = {}): Repository {
   return {
@@ -94,5 +98,46 @@ describe("buildAddableGroups", () => {
 
   it("returns no groups for an empty accessible list", () => {
     expect(buildAddableGroups([], new Set(), [], SLUG)).toEqual([]);
+  });
+});
+
+describe("computeInstallableTargets", () => {
+  it("returns orgs without an installation plus the personal account", () => {
+    const targets = computeInstallableTargets([org("devs-group"), org("acme")], "octocat", [
+      installation({ account: "acme" }),
+    ]);
+    expect(targets).toEqual([
+      { account: "devs-group", accountType: "Organization" },
+      { account: "octocat", accountType: "User" },
+    ]);
+  });
+
+  it("excludes the personal account when it already has an installation", () => {
+    const targets = computeInstallableTargets([], "octocat", [
+      installation({ account: "octocat", accountType: "User" }),
+    ]);
+    expect(targets).toEqual([]);
+  });
+
+  it("matches installed accounts case-insensitively", () => {
+    const targets = computeInstallableTargets([org("Devs-Group")], "octocat", [
+      installation({ account: "devs-group" }),
+    ]);
+    expect(targets.map((t) => t.account)).toEqual(["octocat"]);
+  });
+
+  it("sorts targets alphabetically and labels org vs user", () => {
+    const targets = computeInstallableTargets([org("zeta"), org("alpha")], "mike", []);
+    expect(targets).toEqual([
+      { account: "alpha", accountType: "Organization" },
+      { account: "mike", accountType: "User" },
+      { account: "zeta", accountType: "Organization" },
+    ]);
+  });
+
+  it("returns empty when no orgs and personal account is installed", () => {
+    expect(
+      computeInstallableTargets([], "octocat", [installation({ account: "octocat" })]),
+    ).toEqual([]);
   });
 });

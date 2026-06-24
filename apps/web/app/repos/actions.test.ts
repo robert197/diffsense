@@ -29,6 +29,7 @@ function fakeClient(over: Partial<GitHubClient> = {}): GitHubClient {
     listInstallations: vi.fn(async () => []),
     listAccessibleRepositories: vi.fn(async () => []),
     listInstallationRepositories: vi.fn(async () => []),
+    listUserOrganizations: vi.fn(async () => []),
     ...over,
   } as unknown as GitHubClient;
 }
@@ -141,10 +142,57 @@ describe("loadAddableRepos", () => {
   });
 
   it("returns empty groups and a generic install URL when the user can access no repos", async () => {
-    getSession.mockResolvedValue({ github: fakeClient() });
+    getSession.mockResolvedValue({ github: fakeClient(), login: "octocat" });
     expect(await loadAddableRepos()).toEqual({
       groups: [],
+      installableTargets: [{ account: "octocat", accountType: "User" }],
       installNewUrl: "https://github.com/apps/diffsense/installations/new",
     });
+  });
+
+  it("surfaces orgs without an installation as installable targets", async () => {
+    const github = fakeClient({
+      listInstallations: vi.fn(async () => [
+        { id: 7, account: "acme", avatarUrl: null, accountType: "Organization" },
+      ]),
+      listUserOrganizations: vi.fn(async () => [
+        { login: "devs-group", id: 48035703, avatarUrl: null },
+        { login: "acme", id: 7, avatarUrl: null },
+      ]),
+    });
+    getSession.mockResolvedValue({ github, login: "octocat" });
+
+    const result = await loadAddableRepos();
+    if ("error" in result) throw new Error("expected groups");
+    // acme is already installed → excluded; devs-group + personal remain.
+    expect(result.installableTargets).toEqual([
+      { account: "devs-group", accountType: "Organization" },
+      { account: "octocat", accountType: "User" },
+    ]);
+  });
+
+  it("degrades to no install targets when listUserOrganizations fails (non-auth)", async () => {
+    const github = fakeClient({
+      listUserOrganizations: vi.fn(async () => {
+        throw new Error("403 members read");
+      }),
+    });
+    getSession.mockResolvedValue({ github, login: "octocat" });
+
+    const result = await loadAddableRepos();
+    if ("error" in result) throw new Error("expected groups");
+    // Personal account still offered; org listing simply contributed nothing.
+    expect(result.installableTargets).toEqual([{ account: "octocat", accountType: "User" }]);
+  });
+
+  it("returns { error: 'reauth' } when listUserOrganizations hits a 401", async () => {
+    const github = fakeClient({
+      listUserOrganizations: vi.fn(async () => {
+        throw new GitHubAuthError();
+      }),
+    });
+    getSession.mockResolvedValue({ github, login: "octocat" });
+
+    expect(await loadAddableRepos()).toEqual({ error: "reauth" });
   });
 });
