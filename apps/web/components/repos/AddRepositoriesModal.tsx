@@ -214,24 +214,26 @@ function Body({
         </div>
       )}
 
-      {state.installableTargets.length > 0 && (
+      {state.installableTargets.length > 0 ? (
         <InstallableTargets
           targets={state.installableTargets}
           installNewUrl={state.installNewUrl}
         />
+      ) : (
+        // Fallback when we can't enumerate installable accounts (e.g. /user/orgs
+        // unreadable): the canonical install page still lists them on GitHub.
+        <div className="border-t border-border/70 pt-3">
+          <a
+            href={state.installNewUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+          >
+            <ExternalLink className="size-3.5" />
+            Install on another account
+          </a>
+        </div>
       )}
-
-      <div className="border-t border-border/70 pt-3">
-        <a
-          href={state.installNewUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
-        >
-          <ExternalLink className="size-3.5" />
-          Install on another account
-        </a>
-      </div>
     </div>
   );
 }

@@ -301,21 +301,15 @@ describe("createGitHubClient", () => {
     await expect(client.listAccessibleRepositories()).rejects.toBeInstanceOf(GitHubRateLimitError);
   });
 
-  it("lists the user's organisations from /user/orgs and maps login/id/avatar", async () => {
+  it("lists the user's organisations from /user/orgs by login", async () => {
     const fetchImpl = vi.fn(async () =>
-      jsonResponse([
-        { login: "devs-group", id: 48035703, avatar_url: "https://a/dg.png" },
-        { login: "acme", id: 7, avatar_url: null },
-      ]),
+      jsonResponse([{ login: "devs-group", id: 48035703 }, { login: "acme" }]),
     );
     const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
     const orgs = await client.listUserOrganizations();
 
     expect(fetchImpl.mock.calls[0][0]).toContain("/user/orgs");
-    expect(orgs).toEqual([
-      { login: "devs-group", id: 48035703, avatarUrl: "https://a/dg.png" },
-      { login: "acme", id: 7, avatarUrl: null },
-    ]);
+    expect(orgs).toEqual([{ login: "devs-group" }, { login: "acme" }]);
   });
 
   it("paginates organisations across pages and stops on a short page", async () => {

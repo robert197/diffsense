@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { buildAddableGroups, computeInstallableTargets } from "./addableRepos";
 import type { Installation, Organization, Repository } from "./github";
 
-function org(login: string, id = 1): Organization {
-  return { login, id, avatarUrl: null };
+function org(login: string): Organization {
+  return { login };
 }
 
 function repo(over: Partial<Repository> = {}): Repository {

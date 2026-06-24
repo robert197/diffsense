@@ -81,8 +81,6 @@ export interface Installation {
  */
 export interface Organization {
   login: string;
-  id: number;
-  avatarUrl: string | null;
 }
 
 /**
@@ -498,12 +496,7 @@ function mapInstallation(raw: unknown): Installation {
 }
 
 function mapOrganization(raw: unknown): Organization {
-  const data = asRecord(raw);
-  return {
-    login: String(data.login ?? ""),
-    id: Number(data.id),
-    avatarUrl: typeof data.avatar_url === "string" ? data.avatar_url : null,
-  };
+  return { login: String(asRecord(raw).login ?? "") };
 }
 
 function mapRepository(raw: unknown): Repository {

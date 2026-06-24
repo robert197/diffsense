@@ -185,6 +185,28 @@ describe("loadAddableRepos", () => {
     expect(result.installableTargets).toEqual([{ account: "octocat", accountType: "User" }]);
   });
 
+  it("absorbs a rate-limit from listUserOrganizations (degrade, don't reauth or throw)", async () => {
+    const github = fakeClient({
+      listUserOrganizations: vi.fn(async () => {
+        throw new GitHubRateLimitError();
+      }),
+    });
+    getSession.mockResolvedValue({ github, login: "octocat" });
+
+    // Unlike per-installation repo fetches, an org-listing rate-limit only means no
+    // install cards — it must not become a reauth or a thrown error.
+    const result = await loadAddableRepos();
+    if ("error" in result) throw new Error("expected groups, not reauth");
+    expect(result.installableTargets).toEqual([{ account: "octocat", accountType: "User" }]);
+  });
+
+  it("omits the personal account from install targets when the session login is blank", async () => {
+    getSession.mockResolvedValue({ github: fakeClient(), login: "" });
+    const result = await loadAddableRepos();
+    if ("error" in result) throw new Error("expected groups");
+    expect(result.installableTargets).toEqual([]);
+  });
+
   it("returns { error: 'reauth' } when listUserOrganizations hits a 401", async () => {
     const github = fakeClient({
       listUserOrganizations: vi.fn(async () => {

@@ -30,8 +30,7 @@ export interface AddableGroup {
  */
 export interface InstallableTarget {
   account: string;
-  /** `"Organization"` or `"User"`. */
-  accountType: string;
+  accountType: "Organization" | "User";
 }
 
 export type AddableReposResult =
@@ -48,25 +47,17 @@ export function computeInstallableTargets(
   personalLogin: string,
   installations: Installation[],
 ): InstallableTarget[] {
+  // GitHub logins are globally unique across users and orgs, so the org list has no
+  // duplicates and can't collide with the personal login — filtering against the
+  // installed set is enough; no separate dedup pass needed.
   const installed = new Set(installations.map((i) => i.account.toLowerCase()));
   const candidates: InstallableTarget[] = [
-    ...orgs.map((o) => ({ account: o.login, accountType: "Organization" })),
-    { account: personalLogin, accountType: "User" },
+    ...orgs.map((o) => ({ account: o.login, accountType: "Organization" as const })),
+    { account: personalLogin, accountType: "User" as const },
   ];
-  const seen = new Set<string>();
-  const out: InstallableTarget[] = [];
-  for (const c of candidates) {
-    if (!c.account) {
-      continue;
-    }
-    const key = c.account.toLowerCase();
-    if (installed.has(key) || seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    out.push(c);
-  }
-  return out.sort((a, b) => a.account.localeCompare(b.account));
+  return candidates
+    .filter((c) => c.account && !installed.has(c.account.toLowerCase()))
+    .sort((a, b) => a.account.localeCompare(b.account));
 }
 
 /**
