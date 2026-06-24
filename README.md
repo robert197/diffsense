@@ -113,3 +113,5 @@ npx smee-client --url https://smee.io/your-channel --target http://localhost:300
 Set the GitHub App's webhook URL to the same smee channel. Opening a PR on the
 installed repo then flows through to a single placeholder comment. Alternatively,
 replay the recorded fixture in `apps/app/test/fixtures/` against a running ingress.
+
+<!-- diffsense app smoke test PR — safe to close -->
