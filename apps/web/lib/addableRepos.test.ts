@@ -1,15 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { buildAddableGroups, computeInstallableTargets } from "./addableRepos";
-import type { Installation, Organization, Repository } from "./github";
-
-function org(login: string): Organization {
-  return { login };
-}
+import type { Installation, OrgMembership, Repository } from "./github";
 
 function repo(over: Partial<Repository> = {}): Repository {
   return {
     owner: "acme",
-    ownerId: 10,
     name: "web",
     fullName: "acme/web",
     private: false,
@@ -19,125 +14,110 @@ function repo(over: Partial<Repository> = {}): Repository {
 }
 
 function installation(over: Partial<Installation> = {}): Installation {
-  return { id: 1, account: "acme", avatarUrl: null, accountType: "Organization", ...over };
+  return {
+    id: 1,
+    account: "acme",
+    avatarUrl: null,
+    accountType: "Organization",
+    repositorySelection: "all",
+    configureUrl: "https://github.com/organizations/acme/settings/installations/1",
+    ...over,
+  };
 }
 
-const SLUG = "diffsense";
+function membership(login: string, role: "admin" | "member"): OrgMembership {
+  return { login, role, state: "active" };
+}
 
 describe("buildAddableGroups", () => {
-  it("marks a repo added only when it is in the installed set", () => {
-    const groups = buildAddableGroups(
-      [repo({ fullName: "acme/web", name: "web" }), repo({ fullName: "acme/api", name: "api" })],
-      new Set(["acme/api"]),
-      [installation()],
-      SLUG,
-    );
-    const repos = groups[0].repos;
-    expect(repos.find((r) => r.name === "api")?.added).toBe(true);
-    expect(repos.find((r) => r.name === "web")?.added).toBe(false);
+  it("builds one group per installation from its repos (private preserved)", () => {
+    const inst = installation({ id: 7, account: "acme" });
+    const repos = new Map([
+      [
+        7,
+        [
+          repo({ fullName: "acme/web", name: "web" }),
+          repo({ fullName: "acme/secret", name: "secret", private: true }),
+        ],
+      ],
+    ]);
+    const groups = buildAddableGroups([inst], repos);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].account).toBe("acme");
+    expect(groups[0].repos.map((r) => r.name)).toEqual(["web", "secret"]);
+    expect(groups[0].repos.find((r) => r.name === "secret")?.private).toBe(true);
   });
 
-  it("groups repos by account and resolves accountType from the installation", () => {
-    const groups = buildAddableGroups(
-      [
-        repo({ owner: "acme", ownerId: 10, fullName: "acme/web", name: "web" }),
-        repo({ owner: "octocat", ownerId: 20, fullName: "octocat/site", name: "site" }),
-      ],
-      new Set(),
-      [installation({ account: "acme", accountType: "Organization" })],
-      SLUG,
+  it("sets manageUrl only for a 'selected' installation", () => {
+    const all = installation({ id: 1, account: "all-org", repositorySelection: "all" });
+    const selected = installation({
+      id: 2,
+      account: "sel-org",
+      repositorySelection: "selected",
+      configureUrl: "https://github.com/organizations/sel-org/settings/installations/2",
+    });
+    const groups = buildAddableGroups([all, selected], new Map());
+    expect(groups.find((g) => g.account === "all-org")?.manageUrl).toBeNull();
+    expect(groups.find((g) => g.account === "sel-org")?.manageUrl).toBe(
+      "https://github.com/organizations/sel-org/settings/installations/2",
     );
-    const acme = groups.find((g) => g.account === "acme");
-    const octocat = groups.find((g) => g.account === "octocat");
-    expect(acme?.accountType).toBe("Organization");
-    // No installation for octocat → defaults to User.
-    expect(octocat?.accountType).toBe("User");
   });
 
-  it("uses the canonical install URL for every account group", () => {
+  it("sorts repos most-recently-pushed first and groups alphabetically", () => {
     const groups = buildAddableGroups(
-      [
-        repo({ owner: "acme", ownerId: 555, fullName: "acme/web" }),
-        repo({ owner: "octocat", ownerId: null, fullName: "octocat/site" }),
-      ],
-      new Set(),
-      [],
-      SLUG,
+      [installation({ id: 1, account: "zeta" }), installation({ id: 2, account: "alpha" })],
+      new Map([
+        [
+          1,
+          [
+            repo({ fullName: "zeta/old", name: "old", pushedAt: "2026-01-01T00:00:00Z" }),
+            repo({ fullName: "zeta/new", name: "new", pushedAt: "2026-06-01T00:00:00Z" }),
+          ],
+        ],
+      ]),
     );
-    for (const group of groups) {
-      expect(group.installUrl).toBe("https://github.com/apps/diffsense/installations/new");
-    }
-  });
-
-  it("sorts not-added repos before added within a group", () => {
-    const groups = buildAddableGroups(
-      [
-        repo({ fullName: "acme/added", name: "added" }),
-        repo({ fullName: "acme/fresh", name: "fresh" }),
-      ],
-      new Set(["acme/added"]),
-      [installation()],
-      SLUG,
-    );
-    expect(groups[0].repos.map((r) => r.name)).toEqual(["fresh", "added"]);
-  });
-
-  it("orders accounts with at least one addable repo before fully-added accounts", () => {
-    const groups = buildAddableGroups(
-      [
-        repo({ owner: "zeta", ownerId: 1, fullName: "zeta/all-added", name: "x" }),
-        repo({ owner: "alpha", ownerId: 2, fullName: "alpha/fresh", name: "y" }),
-      ],
-      new Set(["zeta/all-added"]),
-      [],
-      SLUG,
-    );
-    // alpha has an addable repo, zeta is fully added → alpha first despite Z<A.
     expect(groups.map((g) => g.account)).toEqual(["alpha", "zeta"]);
+    expect(groups.find((g) => g.account === "zeta")?.repos.map((r) => r.name)).toEqual([
+      "new",
+      "old",
+    ]);
   });
 
-  it("returns no groups for an empty accessible list", () => {
-    expect(buildAddableGroups([], new Set(), [], SLUG)).toEqual([]);
+  it("returns a group with no repos when an installation has none fetched", () => {
+    const groups = buildAddableGroups([installation({ id: 1, account: "acme" })], new Map());
+    expect(groups[0].repos).toEqual([]);
   });
 });
 
 describe("computeInstallableTargets", () => {
-  it("returns orgs without an installation plus the personal account", () => {
-    const targets = computeInstallableTargets([org("devs-group"), org("acme")], "octocat", [
-      installation({ account: "acme" }),
-    ]);
+  it("labels admin orgs install and member orgs request; personal is install", () => {
+    const targets = computeInstallableTargets(
+      [membership("devs-group", "member"), membership("acme", "admin")],
+      "octocat",
+      [],
+    );
     expect(targets).toEqual([
-      { account: "devs-group", accountType: "Organization" },
-      { account: "octocat", accountType: "User" },
+      { account: "acme", accountType: "Organization", installType: "install" },
+      { account: "devs-group", accountType: "Organization", installType: "request" },
+      { account: "octocat", accountType: "User", installType: "install" },
     ]);
   });
 
-  it("excludes the personal account when it already has an installation", () => {
-    const targets = computeInstallableTargets([], "octocat", [
-      installation({ account: "octocat", accountType: "User" }),
-    ]);
-    expect(targets).toEqual([]);
-  });
-
-  it("matches installed accounts case-insensitively", () => {
-    const targets = computeInstallableTargets([org("Devs-Group")], "octocat", [
+  it("excludes an org that already has an installation (case-insensitive), keeps personal", () => {
+    const targets = computeInstallableTargets([membership("Devs-Group", "member")], "octocat", [
       installation({ account: "devs-group" }),
     ]);
+    // Devs-Group is installed as devs-group → dropped; personal octocat remains.
     expect(targets.map((t) => t.account)).toEqual(["octocat"]);
   });
 
-  it("sorts targets alphabetically and labels org vs user", () => {
-    const targets = computeInstallableTargets([org("zeta"), org("alpha")], "mike", []);
-    expect(targets).toEqual([
-      { account: "alpha", accountType: "Organization" },
-      { account: "mike", accountType: "User" },
-      { account: "zeta", accountType: "Organization" },
-    ]);
-  });
-
-  it("returns empty when no orgs and personal account is installed", () => {
+  it("returns empty when no memberships and personal is installed", () => {
     expect(
       computeInstallableTargets([], "octocat", [installation({ account: "octocat" })]),
     ).toEqual([]);
+  });
+
+  it("omits the personal account when the login is blank", () => {
+    expect(computeInstallableTargets([], "", [])).toEqual([]);
   });
 });

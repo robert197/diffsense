@@ -3,6 +3,7 @@ import {
   GitHubAuthError,
   type GitHubClient,
   GitHubRateLimitError,
+  type Installation,
   type Repository,
 } from "../../lib/github";
 
@@ -15,7 +16,6 @@ import { loadAddableRepos } from "./actions";
 function repo(over: Partial<Repository> = {}): Repository {
   return {
     owner: "acme",
-    ownerId: 10,
     name: "web",
     fullName: "acme/web",
     private: false,
@@ -24,12 +24,23 @@ function repo(over: Partial<Repository> = {}): Repository {
   };
 }
 
+function installation(over: Partial<Installation> = {}): Installation {
+  return {
+    id: 7,
+    account: "acme",
+    avatarUrl: null,
+    accountType: "Organization",
+    repositorySelection: "all",
+    configureUrl: "https://github.com/organizations/acme/settings/installations/7",
+    ...over,
+  };
+}
+
 function fakeClient(over: Partial<GitHubClient> = {}): GitHubClient {
   return {
     listInstallations: vi.fn(async () => []),
-    listAccessibleRepositories: vi.fn(async () => []),
     listInstallationRepositories: vi.fn(async () => []),
-    listUserOrganizations: vi.fn(async () => []),
+    listUserMemberships: vi.fn(async () => []),
     ...over,
   } as unknown as GitHubClient;
 }
@@ -49,44 +60,99 @@ describe("loadAddableRepos", () => {
     expect(await loadAddableRepos()).toEqual({ error: "reauth" });
   });
 
-  it("annotates accessible repos with installed state and groups them", async () => {
+  it("builds a group from an installation's repos", async () => {
     const github = fakeClient({
-      listInstallations: vi.fn(async () => [
-        { id: 7, account: "acme", avatarUrl: null, accountType: "Organization" },
-      ]),
-      listAccessibleRepositories: vi.fn(async () => [
-        repo({ fullName: "acme/web", name: "web" }),
-        repo({ fullName: "acme/api", name: "api" }),
-      ]),
+      listInstallations: vi.fn(async () => [installation({ id: 7, account: "acme" })]),
       listInstallationRepositories: vi.fn(async () => [
-        repo({ fullName: "acme/api", name: "api" }),
+        repo({ fullName: "acme/web", name: "web" }),
+        repo({ fullName: "acme/secret", name: "secret", private: true }),
       ]),
     });
-    getSession.mockResolvedValue({ github });
+    getSession.mockResolvedValue({ github, login: "octocat" });
 
     const result = await loadAddableRepos();
     if ("error" in result) throw new Error("expected groups");
     expect(result.groups).toHaveLength(1);
-    const repos = result.groups[0].repos;
-    expect(repos.find((r) => r.name === "api")?.added).toBe(true);
-    expect(repos.find((r) => r.name === "web")?.added).toBe(false);
+    expect(result.groups[0].account).toBe("acme");
+    expect(result.groups[0].repos.map((r) => r.name).sort()).toEqual(["secret", "web"]);
   });
 
-  it("degrades a single installation's non-auth failure to 'not added' (no throw)", async () => {
+  it("sets manageUrl on a group whose installation is 'selected'", async () => {
     const github = fakeClient({
       listInstallations: vi.fn(async () => [
-        { id: 7, account: "acme", avatarUrl: null, accountType: "Organization" },
+        installation({ id: 7, account: "acme", repositorySelection: "selected" }),
       ]),
-      listAccessibleRepositories: vi.fn(async () => [repo({ fullName: "acme/web" })]),
-      listInstallationRepositories: vi.fn(async () => {
-        throw new Error("transient 500");
-      }),
+      listInstallationRepositories: vi.fn(async () => [repo({ fullName: "acme/web" })]),
     });
-    getSession.mockResolvedValue({ github });
+    getSession.mockResolvedValue({ github, login: "octocat" });
 
     const result = await loadAddableRepos();
     if ("error" in result) throw new Error("expected groups");
-    expect(result.groups[0].repos[0].added).toBe(false);
+    expect(result.groups[0].manageUrl).toBe(
+      "https://github.com/organizations/acme/settings/installations/7",
+    );
+  });
+
+  it("labels admin orgs install and member orgs request among installable targets", async () => {
+    const github = fakeClient({
+      listInstallations: vi.fn(async () => [installation({ id: 7, account: "acme" })]),
+      listUserMemberships: vi.fn(async () => [
+        { login: "devs-group", role: "member" as const, state: "active" },
+        { login: "owned-org", role: "admin" as const, state: "active" },
+        { login: "acme", role: "admin" as const, state: "active" },
+      ]),
+    });
+    getSession.mockResolvedValue({ github, login: "octocat" });
+
+    const result = await loadAddableRepos();
+    if ("error" in result) throw new Error("expected groups");
+    // acme already installed → excluded; member -> request, admin -> install.
+    expect(result.installableTargets).toEqual([
+      { account: "devs-group", accountType: "Organization", installType: "request" },
+      { account: "octocat", accountType: "User", installType: "install" },
+      { account: "owned-org", accountType: "Organization", installType: "install" },
+    ]);
+  });
+
+  it("degrades to no install targets when listUserMemberships fails (non-auth)", async () => {
+    const github = fakeClient({
+      listUserMemberships: vi.fn(async () => {
+        throw new Error("403 members read");
+      }),
+    });
+    getSession.mockResolvedValue({ github, login: "octocat" });
+
+    const result = await loadAddableRepos();
+    if ("error" in result) throw new Error("expected groups");
+    expect(result.installableTargets).toEqual([
+      { account: "octocat", accountType: "User", installType: "install" },
+    ]);
+  });
+
+  it("absorbs a rate-limit from listUserMemberships (degrade, don't reauth or throw)", async () => {
+    const github = fakeClient({
+      listUserMemberships: vi.fn(async () => {
+        throw new GitHubRateLimitError();
+      }),
+    });
+    getSession.mockResolvedValue({ github, login: "octocat" });
+
+    const result = await loadAddableRepos();
+    if ("error" in result) throw new Error("expected groups, not reauth");
+    expect(result.installableTargets).toEqual([
+      { account: "octocat", accountType: "User", installType: "install" },
+    ]);
+  });
+
+  it("returns { error: 'reauth' } when listUserMemberships hits a 401", async () => {
+    const github = fakeClient({
+      listUserMemberships: vi.fn(async () => {
+        throw new GitHubAuthError();
+      }),
+    });
+    getSession.mockResolvedValue({ github, login: "octocat" });
+
+    expect(await loadAddableRepos()).toEqual({ error: "reauth" });
   });
 
   it("returns { error: 'reauth' } when listInstallations hits a 401", async () => {
@@ -95,126 +161,29 @@ describe("loadAddableRepos", () => {
         throw new GitHubAuthError();
       }),
     });
-    getSession.mockResolvedValue({ github });
+    getSession.mockResolvedValue({ github, login: "octocat" });
 
     expect(await loadAddableRepos()).toEqual({ error: "reauth" });
   });
 
-  it("returns { error: 'reauth' } when a per-installation fetch hits a 401", async () => {
+  it("degrades a single installation's non-auth repo-fetch failure to an empty group", async () => {
     const github = fakeClient({
-      listInstallations: vi.fn(async () => [
-        { id: 7, account: "acme", avatarUrl: null, accountType: "Organization" },
-      ]),
-      listAccessibleRepositories: vi.fn(async () => [repo({ fullName: "acme/web" })]),
+      listInstallations: vi.fn(async () => [installation({ id: 7, account: "acme" })]),
       listInstallationRepositories: vi.fn(async () => {
-        throw new GitHubAuthError();
+        throw new Error("transient 500");
       }),
     });
-    getSession.mockResolvedValue({ github });
+    getSession.mockResolvedValue({ github, login: "octocat" });
 
-    expect(await loadAddableRepos()).toEqual({ error: "reauth" });
+    const result = await loadAddableRepos();
+    if ("error" in result) throw new Error("expected groups");
+    expect(result.groups[0].repos).toEqual([]);
   });
 
-  it("propagates a per-installation rate-limit instead of silently marking repos not-added", async () => {
-    const github = fakeClient({
-      listInstallations: vi.fn(async () => [
-        { id: 7, account: "acme", avatarUrl: null, accountType: "Organization" },
-      ]),
-      listAccessibleRepositories: vi.fn(async () => [repo({ fullName: "acme/web" })]),
-      listInstallationRepositories: vi.fn(async () => {
-        throw new GitHubRateLimitError();
-      }),
-    });
-    getSession.mockResolvedValue({ github });
-
-    await expect(loadAddableRepos()).rejects.toBeInstanceOf(GitHubRateLimitError);
-  });
-
-  it("returns { error: 'reauth' } when listing accessible repos hits a 401", async () => {
-    const github = fakeClient({
-      listAccessibleRepositories: vi.fn(async () => {
-        throw new GitHubAuthError();
-      }),
-    });
-    getSession.mockResolvedValue({ github });
-
-    expect(await loadAddableRepos()).toEqual({ error: "reauth" });
-  });
-
-  it("returns empty groups and a generic install URL when the user can access no repos", async () => {
+  it("always includes a generic install URL", async () => {
     getSession.mockResolvedValue({ github: fakeClient(), login: "octocat" });
-    expect(await loadAddableRepos()).toEqual({
-      groups: [],
-      installableTargets: [{ account: "octocat", accountType: "User" }],
-      installNewUrl: "https://github.com/apps/diffsense/installations/new",
-    });
-  });
-
-  it("surfaces orgs without an installation as installable targets", async () => {
-    const github = fakeClient({
-      listInstallations: vi.fn(async () => [
-        { id: 7, account: "acme", avatarUrl: null, accountType: "Organization" },
-      ]),
-      listUserOrganizations: vi.fn(async () => [
-        { login: "devs-group", id: 48035703, avatarUrl: null },
-        { login: "acme", id: 7, avatarUrl: null },
-      ]),
-    });
-    getSession.mockResolvedValue({ github, login: "octocat" });
-
     const result = await loadAddableRepos();
     if ("error" in result) throw new Error("expected groups");
-    // acme is already installed → excluded; devs-group + personal remain.
-    expect(result.installableTargets).toEqual([
-      { account: "devs-group", accountType: "Organization" },
-      { account: "octocat", accountType: "User" },
-    ]);
-  });
-
-  it("degrades to no install targets when listUserOrganizations fails (non-auth)", async () => {
-    const github = fakeClient({
-      listUserOrganizations: vi.fn(async () => {
-        throw new Error("403 members read");
-      }),
-    });
-    getSession.mockResolvedValue({ github, login: "octocat" });
-
-    const result = await loadAddableRepos();
-    if ("error" in result) throw new Error("expected groups");
-    // Personal account still offered; org listing simply contributed nothing.
-    expect(result.installableTargets).toEqual([{ account: "octocat", accountType: "User" }]);
-  });
-
-  it("absorbs a rate-limit from listUserOrganizations (degrade, don't reauth or throw)", async () => {
-    const github = fakeClient({
-      listUserOrganizations: vi.fn(async () => {
-        throw new GitHubRateLimitError();
-      }),
-    });
-    getSession.mockResolvedValue({ github, login: "octocat" });
-
-    // Unlike per-installation repo fetches, an org-listing rate-limit only means no
-    // install cards — it must not become a reauth or a thrown error.
-    const result = await loadAddableRepos();
-    if ("error" in result) throw new Error("expected groups, not reauth");
-    expect(result.installableTargets).toEqual([{ account: "octocat", accountType: "User" }]);
-  });
-
-  it("omits the personal account from install targets when the session login is blank", async () => {
-    getSession.mockResolvedValue({ github: fakeClient(), login: "" });
-    const result = await loadAddableRepos();
-    if ("error" in result) throw new Error("expected groups");
-    expect(result.installableTargets).toEqual([]);
-  });
-
-  it("returns { error: 'reauth' } when listUserOrganizations hits a 401", async () => {
-    const github = fakeClient({
-      listUserOrganizations: vi.fn(async () => {
-        throw new GitHubAuthError();
-      }),
-    });
-    getSession.mockResolvedValue({ github, login: "octocat" });
-
-    expect(await loadAddableRepos()).toEqual({ error: "reauth" });
+    expect(result.installNewUrl).toBe("https://github.com/apps/diffsense/installations/new");
   });
 });
