@@ -1,5 +1,6 @@
 import { ArrowRight, Building2, FolderGit2, User } from "lucide-react";
 import { redirect } from "next/navigation";
+import { AddRepositoriesModal } from "../../components/repos/AddRepositoriesModal";
 import { RepoRow } from "../../components/repos/RepoRow";
 import { AppHeader } from "../../components/site/AppHeader";
 import { Badge } from "../../components/ui/badge";
@@ -74,13 +75,16 @@ export default async function ReposPage() {
               Pick a repo to see its open pull requests.
             </p>
           </div>
-          <a
-            href="/reviews"
-            className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
-          >
-            Continue reviewing
-            <ArrowRight className="size-4" />
-          </a>
+          <div className="flex items-center gap-4">
+            <a
+              href="/reviews"
+              className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+            >
+              Continue reviewing
+              <ArrowRight className="size-4" />
+            </a>
+            <AddRepositoriesModal />
+          </div>
         </div>
 
         {visible.length === 0 ? (
@@ -129,9 +133,12 @@ function EmptyState() {
         <FolderGit2 className="size-6" />
       </div>
       <h2 className="font-medium">No repositories yet</h2>
-      <p className="mx-auto mt-1 max-w-sm text-sm leading-relaxed text-muted-foreground">
-        Install the diffsense GitHub App on a repository to get started, then refresh this page.
+      <p className="mx-auto mt-1 mb-4 max-w-sm text-sm leading-relaxed text-muted-foreground">
+        Add a repository from your account or organisations to get started.
       </p>
+      <div className="flex justify-center">
+        <AddRepositoriesModal />
+      </div>
     </div>
   );
 }

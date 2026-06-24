@@ -19,6 +19,8 @@ export default defineConfig({
       "apps/web/lib/**/*.test.{ts,tsx}",
       // Route-handler tests (OAuth CSRF guard) and the SwipeDeck component test.
       "apps/web/app/**/*.test.{ts,tsx}",
+      // Standalone component tests (e.g. the Add-repositories modal).
+      "apps/web/components/**/*.test.{ts,tsx}",
     ],
     // Default to Node; `.tsx` component tests opt into jsdom via a per-file
     // `// @vitest-environment jsdom` docblock so the pure suites stay DOM-free.
