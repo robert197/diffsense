@@ -50,26 +50,19 @@ describe("buildAddableGroups", () => {
     expect(octocat?.accountType).toBe("User");
   });
 
-  it("builds a per-account install URL with target_id from the owner id", () => {
+  it("uses the canonical install URL for every account group", () => {
     const groups = buildAddableGroups(
-      [repo({ owner: "acme", ownerId: 555, fullName: "acme/web" })],
+      [
+        repo({ owner: "acme", ownerId: 555, fullName: "acme/web" }),
+        repo({ owner: "octocat", ownerId: null, fullName: "octocat/site" }),
+      ],
       new Set(),
       [],
       SLUG,
     );
-    expect(groups[0].installUrl).toBe(
-      "https://github.com/apps/diffsense/installations/new/permissions?target_id=555",
-    );
-  });
-
-  it("falls back to the generic install URL when no owner id is known", () => {
-    const groups = buildAddableGroups(
-      [repo({ owner: "acme", ownerId: null, fullName: "acme/web" })],
-      new Set(),
-      [],
-      SLUG,
-    );
-    expect(groups[0].installUrl).toBe("https://github.com/apps/diffsense/installations/new");
+    for (const group of groups) {
+      expect(group.installUrl).toBe("https://github.com/apps/diffsense/installations/new");
+    }
   });
 
   it("sorts not-added repos before added within a group", () => {

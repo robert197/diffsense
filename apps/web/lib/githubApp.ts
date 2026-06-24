@@ -22,13 +22,17 @@ export function appSlug(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
- * Build the GitHub installation URL the reviewer is sent to in order to grant the
- * App access. With an `accountId` it targets that specific account's repo-selection
- * screen; without one it opens the generic "pick an account" install page.
+ * The canonical "install / configure this App" URL. GitHub routes it correctly in
+ * every case: pick an account to install on, add repos to an existing installation,
+ * or configure the account that already has it.
+ *
+ * We deliberately do NOT build a per-account `…/installations/new/permissions?target_id=`
+ * deep link. That shape 404s in common cases — when the App is already installed on
+ * the target account, or without a matching `target_type` — and the chicken-and-egg
+ * it was meant to solve (pre-selecting an org) is handled fine by the generic page:
+ * GitHub lists exactly the accounts the user can install on, including new orgs. A
+ * working generic link beats a convenient link that 404s.
  */
-export function buildInstallUrl(slug: string, opts: { accountId?: number } = {}): string {
-  if (typeof opts.accountId === "number") {
-    return `${APPS_BASE}/${slug}/installations/new/permissions?target_id=${opts.accountId}`;
-  }
+export function buildInstallUrl(slug: string): string {
   return `${APPS_BASE}/${slug}/installations/new`;
 }

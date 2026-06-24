@@ -18,15 +18,9 @@ describe("appSlug", () => {
 });
 
 describe("buildInstallUrl", () => {
-  it("builds the generic install URL with no account", () => {
-    expect(buildInstallUrl("diffsense")).toBe(
-      "https://github.com/apps/diffsense/installations/new",
-    );
-  });
-
-  it("builds a per-account install URL targeting the account id", () => {
-    expect(buildInstallUrl("diffsense", { accountId: 42 })).toBe(
-      "https://github.com/apps/diffsense/installations/new/permissions?target_id=42",
+  it("builds the canonical install URL for the slug", () => {
+    expect(buildInstallUrl("diffsense-local")).toBe(
+      "https://github.com/apps/diffsense-local/installations/new",
     );
   });
 });
