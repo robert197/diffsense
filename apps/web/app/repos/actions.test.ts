@@ -166,6 +166,38 @@ describe("loadAddableRepos", () => {
     expect(await loadAddableRepos()).toEqual({ error: "reauth" });
   });
 
+  it("propagates a rate-limit from listInstallations (rejects, not reauth)", async () => {
+    const github = fakeClient({
+      listInstallations: vi.fn(async () => {
+        throw new GitHubRateLimitError();
+      }),
+    });
+    getSession.mockResolvedValue({ github, login: "octocat" });
+    await expect(loadAddableRepos()).rejects.toBeInstanceOf(GitHubRateLimitError);
+  });
+
+  it("propagates a per-installation rate-limit instead of silently degrading to empty", async () => {
+    const github = fakeClient({
+      listInstallations: vi.fn(async () => [installation({ id: 7, account: "acme" })]),
+      listInstallationRepositories: vi.fn(async () => {
+        throw new GitHubRateLimitError();
+      }),
+    });
+    getSession.mockResolvedValue({ github, login: "octocat" });
+    await expect(loadAddableRepos()).rejects.toBeInstanceOf(GitHubRateLimitError);
+  });
+
+  it("returns { error: 'reauth' } when a per-installation fetch hits a 401", async () => {
+    const github = fakeClient({
+      listInstallations: vi.fn(async () => [installation({ id: 7, account: "acme" })]),
+      listInstallationRepositories: vi.fn(async () => {
+        throw new GitHubAuthError();
+      }),
+    });
+    getSession.mockResolvedValue({ github, login: "octocat" });
+    expect(await loadAddableRepos()).toEqual({ error: "reauth" });
+  });
+
   it("degrades a single installation's non-auth repo-fetch failure to an empty group", async () => {
     const github = fakeClient({
       listInstallations: vi.fn(async () => [installation({ id: 7, account: "acme" })]),

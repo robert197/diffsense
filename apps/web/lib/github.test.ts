@@ -87,7 +87,7 @@ describe("createGitHubClient", () => {
     const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
     const [inst] = await client.listInstallations();
     expect(inst.repositorySelection).toBe("all");
-    expect(inst.configureUrl).toBe("");
+    expect(inst.configureUrl).toBeNull();
   });
 
   it("follows a second page of installation repositories then stops", async () => {

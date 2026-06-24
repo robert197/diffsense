@@ -1,10 +1,11 @@
 /**
  * Minimal GitHub REST client for the reviewer entry path (issue #25). Bound to a
  * user-to-server access token, it reads the identity, the App installations and
- * repos the user can access, and a repo's open PRs. Plain `fetch` (injectable for
- * tests) instead of Octokit — this slice needs four read calls, and `apps/web`
- * keeps its dependency surface minimal. GitHub is the product's domain, so a
- * GitHub-specific client here does not touch the provider-agnostic (LLM) rule.
+ * their repositories, the user's org memberships, a repo's open PRs / file content /
+ * head SHA, and posts one comment. Plain `fetch` (injectable for tests) instead of
+ * Octokit — `apps/web` keeps its dependency surface minimal. GitHub is the product's
+ * domain, so a GitHub-specific client here does not touch the provider-agnostic
+ * (LLM) rule.
  */
 
 import type {
@@ -73,8 +74,8 @@ export interface Installation {
   accountType: string;
   /** `"all"` repos in the account, or only a `"selected"` subset. */
   repositorySelection: "all" | "selected";
-  /** GitHub's configure page for this installation (add/remove repos). */
-  configureUrl: string;
+  /** GitHub's configure page for this installation (add/remove repos), or `null`. */
+  configureUrl: string | null;
 }
 
 /**
@@ -471,7 +472,7 @@ function mapInstallation(raw: unknown): Installation {
     avatarUrl: typeof account.avatar_url === "string" ? account.avatar_url : null,
     accountType: String(account.type ?? "User"),
     repositorySelection: data.repository_selection === "selected" ? "selected" : "all",
-    configureUrl: typeof data.html_url === "string" ? data.html_url : "",
+    configureUrl: typeof data.html_url === "string" ? data.html_url : null,
   };
 }
 

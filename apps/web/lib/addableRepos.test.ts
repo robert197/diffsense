@@ -25,8 +25,8 @@ function installation(over: Partial<Installation> = {}): Installation {
   };
 }
 
-function membership(login: string, role: "admin" | "member"): OrgMembership {
-  return { login, role, state: "active" };
+function membership(login: string, role: "admin" | "member", state = "active"): OrgMembership {
+  return { login, role, state };
 }
 
 describe("buildAddableGroups", () => {
@@ -87,6 +87,21 @@ describe("buildAddableGroups", () => {
     const groups = buildAddableGroups([installation({ id: 1, account: "acme" })], new Map());
     expect(groups[0].repos).toEqual([]);
   });
+
+  it("leaves manageUrl null for a 'selected' install with no configure URL", () => {
+    const groups = buildAddableGroups(
+      [
+        installation({
+          id: 1,
+          account: "acme",
+          repositorySelection: "selected",
+          configureUrl: null,
+        }),
+      ],
+      new Map(),
+    );
+    expect(groups[0].manageUrl).toBeNull();
+  });
 });
 
 describe("computeInstallableTargets", () => {
@@ -119,5 +134,15 @@ describe("computeInstallableTargets", () => {
 
   it("omits the personal account when the login is blank", () => {
     expect(computeInstallableTargets([], "", [])).toEqual([]);
+  });
+
+  it("excludes a pending org membership (unaccepted invite)", () => {
+    const targets = computeInstallableTargets(
+      [membership("invited-org", "member", "pending"), membership("real-org", "admin", "active")],
+      "octocat",
+      [],
+    );
+    // pending org dropped; active org + personal remain.
+    expect(targets.map((t) => t.account)).toEqual(["octocat", "real-org"]);
   });
 });

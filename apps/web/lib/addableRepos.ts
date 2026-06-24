@@ -51,8 +51,7 @@ export function buildAddableGroups(
   const groups: AddableGroup[] = installations.map((installation) => ({
     account: installation.account,
     accountType: installation.accountType,
-    manageUrl:
-      installation.repositorySelection === "selected" ? installation.configureUrl || null : null,
+    manageUrl: installation.repositorySelection === "selected" ? installation.configureUrl : null,
     repos: [...(reposByInstallationId.get(installation.id) ?? [])].sort(
       (a, b) => pushedTime(b.pushedAt) - pushedTime(a.pushedAt),
     ),
@@ -73,11 +72,15 @@ export function computeInstallableTargets(
 ): InstallableTarget[] {
   const installed = new Set(installations.map((i) => i.account.toLowerCase()));
   const candidates: InstallableTarget[] = [
-    ...memberships.map((m) => ({
-      account: m.login,
-      accountType: "Organization" as const,
-      installType: m.role === "admin" ? ("install" as const) : ("request" as const),
-    })),
+    // Only `active` memberships are real onboarding targets — a `pending` membership
+    // is an unaccepted invite, so the user can't yet install or request there.
+    ...memberships
+      .filter((m) => m.state === "active")
+      .map((m) => ({
+        account: m.login,
+        accountType: "Organization" as const,
+        installType: m.role === "admin" ? ("install" as const) : ("request" as const),
+      })),
     { account: personalLogin, accountType: "User" as const, installType: "install" as const },
   ];
   return candidates

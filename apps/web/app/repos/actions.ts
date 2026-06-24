@@ -6,12 +6,7 @@ import {
   computeInstallableTargets,
 } from "../../lib/addableRepos";
 import { getSession } from "../../lib/auth/session";
-import {
-  GitHubAuthError,
-  GitHubRateLimitError,
-  type OrgMembership,
-  type Repository,
-} from "../../lib/github";
+import { GitHubAuthError, GitHubRateLimitError, type Repository } from "../../lib/github";
 import { appSlug, buildInstallUrl } from "../../lib/githubApp";
 
 /**
@@ -36,7 +31,7 @@ export async function loadAddableRepos(): Promise<AddableReposResult> {
     // a non-auth failure yields no install cards; a 401 still re-surfaces as reauth.
     const [installations, memberships] = await Promise.all([
       session.github.listInstallations(),
-      session.github.listUserMemberships().catch((err): OrgMembership[] => {
+      session.github.listUserMemberships().catch((err) => {
         if (err instanceof GitHubAuthError) {
           throw err;
         }
@@ -54,7 +49,7 @@ export async function loadAddableRepos(): Promise<AddableReposResult> {
           if (err instanceof GitHubAuthError || err instanceof GitHubRateLimitError) {
             throw err;
           }
-          return [] as Repository[];
+          return [];
         }),
       ),
     );
