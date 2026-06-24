@@ -73,8 +73,24 @@ export interface Installation {
   accountType: string;
 }
 
+/**
+ * Whether an account is a GitHub organisation (vs a personal user). GitHub's
+ * `account.type` is a free string (`"Organization"` / `"User"`); centralise the
+ * comparison so the repo picker and the add-repositories modal can't drift on
+ * casing or the literal.
+ */
+export function isOrgAccount(accountType: string): boolean {
+  return accountType.toLowerCase() === "organization";
+}
+
 export interface Repository {
   owner: string;
+  /**
+   * The owner account's numeric id (user or org). Used to build a per-account
+   * GitHub App install link (`?target_id=`) for repos diffsense isn't yet on.
+   * `null` when GitHub omitted it.
+   */
+  ownerId: number | null;
   name: string;
   fullName: string;
   private: boolean;
@@ -100,6 +116,14 @@ export interface GitHubClient extends GitHubGateway {
   getAuthenticatedUser(): Promise<GitHubUser>;
   listInstallations(): Promise<Installation[]>;
   listInstallationRepositories(installationId: number): Promise<Repository[]>;
+  /**
+   * Every repository the signed-in user can access — repos they own plus repos in
+   * organisations they belong to — independent of whether diffsense is installed on
+   * them. Backs the "Add repositories" modal's browse list (the user picks one, then
+   * grants the App access on GitHub). `listInstallationRepositories` returns only the
+   * *installed* subset; this returns the full reachable set.
+   */
+  listAccessibleRepositories(): Promise<Repository[]>;
   listOpenPullRequests(owner: string, repo: string): Promise<PullRequest[]>;
   /**
    * Raw text of a file at a specific commit, or `null` when it cannot be shown as
@@ -218,6 +242,22 @@ export function createGitHubClient(
           ),
         );
         const items = asArray(body.repositories);
+        out.push(...items.map(mapRepository));
+        if (items.length < PER_PAGE) {
+          break;
+        }
+      }
+      return out;
+    },
+
+    async listAccessibleRepositories(): Promise<Repository[]> {
+      const out: Repository[] = [];
+      for (let page = 1; page <= MAX_PAGES; page++) {
+        const items = asArray(
+          await get(
+            `/user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&direction=desc&per_page=${PER_PAGE}&page=${page}`,
+          ),
+        );
         out.push(...items.map(mapRepository));
         if (items.length < PER_PAGE) {
           break;
@@ -432,6 +472,7 @@ function mapRepository(raw: unknown): Repository {
   const owner = asRecord(data.owner);
   return {
     owner: String(owner.login ?? ""),
+    ownerId: Number.isInteger(Number(owner.id)) ? Number(owner.id) : null,
     name: String(data.name ?? ""),
     fullName: String(data.full_name ?? ""),
     private: Boolean(data.private),

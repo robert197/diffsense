@@ -87,7 +87,7 @@ describe("createGitHubClient", () => {
           full_name: "acme/r100",
           private: true,
           pushed_at: null,
-          owner: { login: "acme" },
+          owner: { login: "acme", id: 99 },
         },
       ],
     };
@@ -103,6 +103,7 @@ describe("createGitHubClient", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(repos[100]).toEqual({
       owner: "acme",
+      ownerId: 99,
       name: "r100",
       fullName: "acme/r100",
       private: true,
@@ -209,6 +210,95 @@ describe("createGitHubClient", () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ login: "octocat" }));
     const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
     await expect(client.getAuthenticatedUser()).rejects.toThrow(/identity/);
+  });
+
+  it("lists accessible repositories from /user/repos and maps owner/private/fullName", async () => {
+    // /user/repos returns a bare array (not the {repositories:[…]} envelope the
+    // installation endpoint uses), so the mapper must read the array directly.
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse([
+        {
+          name: "web",
+          full_name: "acme/web",
+          private: true,
+          pushed_at: null,
+          owner: { login: "acme", id: 1 },
+        },
+        {
+          name: "site",
+          full_name: "octocat/site",
+          private: false,
+          pushed_at: null,
+          owner: { login: "octocat", id: 2 },
+        },
+      ]),
+    );
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    const repos = await client.listAccessibleRepositories();
+
+    expect(fetchImpl.mock.calls[0][0]).toContain("/user/repos");
+    expect(fetchImpl.mock.calls[0][0]).toContain(
+      "affiliation=owner,collaborator,organization_member",
+    );
+    expect(repos).toEqual([
+      {
+        owner: "acme",
+        ownerId: 1,
+        name: "web",
+        fullName: "acme/web",
+        private: true,
+        pushedAt: null,
+      },
+      {
+        owner: "octocat",
+        ownerId: 2,
+        name: "site",
+        fullName: "octocat/site",
+        private: false,
+        pushedAt: null,
+      },
+    ]);
+  });
+
+  it("paginates accessible repositories across pages and stops on a short page", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(repoPage(100).repositories))
+      .mockResolvedValueOnce(jsonResponse(repoPage(3, 100).repositories));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    const repos = await client.listAccessibleRepositories();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(repos).toHaveLength(103);
+  });
+
+  it("stops paginating accessible repositories at the MAX_PAGES cap", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(repoPage(100).repositories));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    const repos = await client.listAccessibleRepositories();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
+    expect(repos).toHaveLength(500);
+  });
+
+  it("returns an empty list when the user can access no repositories", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse([]));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    expect(await client.listAccessibleRepositories()).toEqual([]);
+  });
+
+  it("throws GitHubAuthError on 401 listing accessible repositories", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ message: "Bad credentials" }, 401));
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    await expect(client.listAccessibleRepositories()).rejects.toBeInstanceOf(GitHubAuthError);
+  });
+
+  it("throws GitHubRateLimitError on a rate-limited 403 listing accessible repositories", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ message: "rate limit" }, 403, { "x-ratelimit-remaining": "0" }),
+    );
+    const client = createGitHubClient("t", fetchImpl as unknown as typeof fetch);
+    await expect(client.listAccessibleRepositories()).rejects.toBeInstanceOf(GitHubRateLimitError);
   });
 });
 
