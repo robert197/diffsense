@@ -45,37 +45,30 @@ export function buildAddableGroups(
     installByAccount.set(installation.account.toLowerCase(), installation);
   }
 
-  const byOwner = new Map<
-    string,
-    { account: string; ownerId: number | null; repos: AddableRepo[] }
-  >();
+  const byOwner = new Map<string, { account: string; repos: AddableRepo[] }>();
   for (const repo of accessible) {
     const key = repo.owner.toLowerCase();
     let bucket = byOwner.get(key);
     if (!bucket) {
-      bucket = { account: repo.owner, ownerId: repo.ownerId, repos: [] };
+      bucket = { account: repo.owner, repos: [] };
       byOwner.set(key, bucket);
-    }
-    // Prefer the first non-null ownerId seen for the account (for the install URL).
-    if (bucket.ownerId === null && repo.ownerId !== null) {
-      bucket.ownerId = repo.ownerId;
     }
     const { ownerId, ...repoFields } = repo;
     bucket.repos.push({ ...repoFields, added: installedFullNames.has(repo.fullName) });
   }
 
+  // One canonical install link for every account — GitHub's install page lists the
+  // accounts the user can install/configure on (see buildInstallUrl for why we don't
+  // build per-account deep links).
+  const installUrl = buildInstallUrl(slug);
   const groups: AddableGroup[] = [];
   for (const bucket of byOwner.values()) {
-    const account = bucket.account;
-    const installation = installByAccount.get(account.toLowerCase());
+    const installation = installByAccount.get(bucket.account.toLowerCase());
     bucket.repos.sort(compareRepos);
     groups.push({
-      account,
+      account: bucket.account,
       accountType: installation?.accountType ?? "User",
-      installUrl: buildInstallUrl(
-        slug,
-        bucket.ownerId !== null ? { accountId: bucket.ownerId } : {},
-      ),
+      installUrl,
       repos: bucket.repos,
     });
   }

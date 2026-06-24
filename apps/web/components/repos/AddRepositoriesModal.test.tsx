@@ -18,7 +18,7 @@ const LOADED: AddableReposResult = {
     {
       account: "acme",
       accountType: "Organization",
-      installUrl: "https://github.com/apps/diffsense/installations/new/permissions?target_id=1",
+      installUrl: "https://github.com/apps/diffsense/installations/new",
       repos: [
         {
           owner: "acme",
@@ -75,7 +75,9 @@ describe("AddRepositoriesModal", () => {
     await screen.findByText("acme/fresh");
 
     const addLink = screen.getByRole("link", { name: /^add$/i });
-    expect(addLink.getAttribute("href")).toContain("target_id=1");
+    expect(addLink.getAttribute("href")).toBe(
+      "https://github.com/apps/diffsense/installations/new",
+    );
     expect(addLink.getAttribute("target")).toBe("_blank");
 
     const addedLink = screen.getByRole("link", { name: /added/i });
