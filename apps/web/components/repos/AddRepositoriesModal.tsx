@@ -25,6 +25,9 @@ import { RepoRow } from "./RepoRow";
  * server-only OAuth token), not on every `/repos` render.
  */
 
+/** Shared empty selection — reused so a reset to "nothing opened" is a no-op re-render. */
+const EMPTY_OPENED: ReadonlySet<string> = new Set();
+
 type LoadState =
   | { status: "idle" }
   | { status: "loading" }
@@ -43,7 +46,7 @@ export function AddRepositoriesModal() {
   // Accounts whose Install/Request link the reviewer just opened on GitHub. Local
   // UI only — it drives the "Opened on GitHub, refresh when done" hint; the real
   // state change arrives via the refresh on return. Cleared on close.
-  const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
+  const [opened, setOpened] = useState<ReadonlySet<string>>(EMPTY_OPENED);
   // Guards the async load against itself: `loadingRef` drops a concurrent call
   // (rapid "Try again" clicks); `genRef` invalidates an in-flight load when the
   // dialog closes, so a late response never writes stale state onto a closed modal.
@@ -53,6 +56,12 @@ export function AddRepositoriesModal() {
   // status without re-subscribing the listeners on every state change.
   const statusRef = useRef(state.status);
   statusRef.current = state.status;
+  // Synchronous mirror of `open`, set in `onOpenChange` before React re-renders or
+  // tears the listeners down. A focus/visibilitychange event landing in that gap
+  // would otherwise pass the (still "loaded") status gate and write fresh state onto
+  // a closed modal — leaving it non-idle so the next open skips its reload. Gating
+  // on this ref closes that window without depending on effect-cleanup timing.
+  const openRef = useRef(open);
 
   const load = useCallback(async () => {
     if (loadingRef.current) {
@@ -86,18 +95,20 @@ export function AddRepositoriesModal() {
   }, []);
 
   // Refresh on return-to-tab. Installing/requesting opens GitHub in a new tab; when
-  // the reviewer approves and switches back, this re-fetches so a just-synced org
-  // and its (private) repos appear without a manual close/reopen. Only while the
-  // dialog is open and only for a settled `loaded` view — the loading and error
-  // states own their own lifecycle (initial load, manual "Try again"). `load`'s
-  // own guard drops the call if one is already in flight, so rapid focus toggles
-  // can't start a refresh storm.
+  // the reviewer approves and switches back, this re-fetches so a just-synced org and
+  // its (private) repos appear without a manual close/reopen. Gated to a settled
+  // `loaded` view so it doesn't disturb the initial load or the error/"Try again"
+  // path; `load`'s own in-flight guard absorbs rapid focus toggles.
   useEffect(() => {
     if (!open) {
       return;
     }
     function refresh() {
-      if (document.visibilityState !== "visible" || statusRef.current !== "loaded") {
+      if (
+        !openRef.current ||
+        document.visibilityState !== "visible" ||
+        statusRef.current !== "loaded"
+      ) {
         return;
       }
       void load();
@@ -110,11 +121,12 @@ export function AddRepositoriesModal() {
     };
   }, [open, load]);
 
-  const markOpened = useCallback((account: string) => {
+  function markOpened(account: string) {
     setOpened((prev) => new Set(prev).add(account));
-  }, []);
+  }
 
   function onOpenChange(next: boolean) {
+    openRef.current = next;
     setOpen(next);
     if (next) {
       // Each open re-fetches fresh so a just-completed GitHub install shows as
@@ -129,7 +141,7 @@ export function AddRepositoriesModal() {
       loadingRef.current = false;
       setState({ status: "idle" });
       setFilter("");
-      setOpened(new Set());
+      setOpened(EMPTY_OPENED);
     }
   }
 

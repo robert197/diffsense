@@ -34,6 +34,8 @@ const LOADED: AddableReposResult = {
 afterEach(() => {
   cleanup();
   loadAddableRepos.mockReset();
+  // A test may force document.visibilityState = "hidden"; restore the jsdom default.
+  Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
 });
 
 function openModal() {
@@ -198,6 +200,48 @@ describe("AddRepositoriesModal", () => {
     // Reviewer returns from GitHub's install screen -> tab becomes visible.
     fireEvent(document, new Event("visibilitychange"));
     await waitFor(() => expect(loadAddableRepos).toHaveBeenCalledTimes(2));
+  });
+
+  it("also refreshes on a window focus event", async () => {
+    loadAddableRepos.mockResolvedValue(LOADED);
+    render(<AddRepositoriesModal />);
+    openModal();
+    await screen.findByText("acme/fresh");
+    expect(loadAddableRepos).toHaveBeenCalledTimes(1);
+
+    fireEvent(window, new Event("focus"));
+    await waitFor(() => expect(loadAddableRepos).toHaveBeenCalledTimes(2));
+  });
+
+  it("does not refresh while the tab is hidden", async () => {
+    loadAddableRepos.mockResolvedValue(LOADED);
+    render(<AddRepositoriesModal />);
+    openModal();
+    await screen.findByText("acme/fresh");
+    expect(loadAddableRepos).toHaveBeenCalledTimes(1);
+
+    // jsdom reports "visible" by default; force "hidden" so the guard is exercised.
+    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+    fireEvent(document, new Event("visibilitychange"));
+    expect(loadAddableRepos).toHaveBeenCalledTimes(1);
+
+    // Returning to visible resumes the refresh.
+    Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+    fireEvent(document, new Event("visibilitychange"));
+    await waitFor(() => expect(loadAddableRepos).toHaveBeenCalledTimes(2));
+  });
+
+  it("removes the refocus listeners on unmount", async () => {
+    loadAddableRepos.mockResolvedValue(LOADED);
+    const { unmount } = render(<AddRepositoriesModal />);
+    openModal();
+    await screen.findByText("acme/fresh");
+    expect(loadAddableRepos).toHaveBeenCalledTimes(1);
+
+    unmount();
+    fireEvent(document, new Event("visibilitychange"));
+    fireEvent(window, new Event("focus"));
+    expect(loadAddableRepos).toHaveBeenCalledTimes(1);
   });
 
   it("does not refresh on focus while a load is still in flight", async () => {
