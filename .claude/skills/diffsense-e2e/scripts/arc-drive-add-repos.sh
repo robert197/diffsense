@@ -29,7 +29,7 @@ note() { printf '  note: %s\n' "$*"; }
 command -v agent-browser >/dev/null || { echo "agent-browser not installed (npm i -g agent-browser && agent-browser install)"; exit 1; }
 
 # 1) Attach to Arc. If the debug port is down, tell the operator how to relaunch.
-if ! curl -s --max-time 3 "http://localhost:$CDP_PORT/json/version" | grep -q Chrome; then
+if ! curl -s --max-time 3 "http://127.0.0.1:$CDP_PORT/json/version" | grep -q Chrome; then
   echo "No CDP on :$CDP_PORT. Relaunch Arc with: open -na \"Arc\" --args --remote-debugging-port=$CDP_PORT"
   exit 1
 fi
