@@ -187,4 +187,120 @@ describe("AddRepositoriesModal", () => {
     openModal();
     await waitFor(() => expect(loadAddableRepos).toHaveBeenCalledTimes(2));
   });
+
+  it("refreshes the loaded view when the tab regains focus", async () => {
+    loadAddableRepos.mockResolvedValue(LOADED);
+    render(<AddRepositoriesModal />);
+    openModal();
+    await screen.findByText("acme/fresh");
+    expect(loadAddableRepos).toHaveBeenCalledTimes(1);
+
+    // Reviewer returns from GitHub's install screen -> tab becomes visible.
+    fireEvent(document, new Event("visibilitychange"));
+    await waitFor(() => expect(loadAddableRepos).toHaveBeenCalledTimes(2));
+  });
+
+  it("does not refresh on focus while a load is still in flight", async () => {
+    // A load that never resolves keeps the modal in the loading state.
+    loadAddableRepos.mockReturnValue(new Promise<AddableReposResult>(() => {}));
+    render(<AddRepositoriesModal />);
+    openModal();
+    await screen.findByText(/loading your repositories/i);
+    expect(loadAddableRepos).toHaveBeenCalledTimes(1);
+
+    // Focus while loading must not start a second load (guarded on loaded state).
+    fireEvent(document, new Event("visibilitychange"));
+    fireEvent(window, new Event("focus"));
+    expect(loadAddableRepos).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refresh on focus once the dialog is closed", async () => {
+    loadAddableRepos.mockResolvedValue(LOADED);
+    render(<AddRepositoriesModal />);
+    openModal();
+    await screen.findByText("acme/fresh");
+
+    fireEvent.click(screen.getByRole("button", { name: /close/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const callsAfterClose = loadAddableRepos.mock.calls.length;
+
+    fireEvent(document, new Event("visibilitychange"));
+    fireEvent(window, new Event("focus"));
+    expect(loadAddableRepos).toHaveBeenCalledTimes(callsAfterClose);
+  });
+
+  it("reflects a newly-synced org on refocus", async () => {
+    const withDevsGroup: AddableReposResult = {
+      ...LOADED,
+      installableTargets: [],
+      groups: [
+        ...LOADED.groups,
+        {
+          account: "devs-group",
+          accountType: "Organization",
+          manageUrl: null,
+          repos: [
+            {
+              owner: "devs-group",
+              name: "core-gent",
+              fullName: "devs-group/core-gent",
+              private: true,
+              pushedAt: null,
+            },
+          ],
+        },
+      ],
+    };
+    loadAddableRepos.mockResolvedValueOnce(LOADED).mockResolvedValue(withDevsGroup);
+    render(<AddRepositoriesModal />);
+    openModal();
+    await screen.findByText("acme/fresh");
+    expect(screen.queryByText("devs-group/core-gent")).toBeNull();
+
+    fireEvent(document, new Event("visibilitychange"));
+    await screen.findByText("devs-group/core-gent");
+  });
+
+  it("manual Refresh re-fetches the list", async () => {
+    loadAddableRepos.mockResolvedValue(LOADED);
+    render(<AddRepositoriesModal />);
+    openModal();
+    await screen.findByText("acme/fresh");
+    expect(loadAddableRepos).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+    await waitFor(() => expect(loadAddableRepos).toHaveBeenCalledTimes(2));
+  });
+
+  it("marks a target 'opened on GitHub' when its install link is clicked", async () => {
+    loadAddableRepos.mockResolvedValue(LOADED);
+    render(<AddRepositoriesModal />);
+    openModal();
+    await screen.findByText("devs-group");
+
+    // Member org -> Request access -> request-flavoured hint, scoped to that target.
+    fireEvent.click(screen.getByRole("link", { name: /request access/i }));
+    expect(await screen.findByText(/access requested on github/i)).toBeTruthy();
+    expect(screen.queryByText(/opened on github/i)).toBeNull();
+
+    // Admin org -> Install -> install-flavoured hint, independent of the first.
+    fireEvent.click(screen.getByRole("link", { name: /^install$/i }));
+    expect(await screen.findByText(/opened on github/i)).toBeTruthy();
+  });
+
+  it("clears opened-target hints after close and reopen", async () => {
+    loadAddableRepos.mockResolvedValue(LOADED);
+    render(<AddRepositoriesModal />);
+    openModal();
+    await screen.findByText("devs-group");
+    fireEvent.click(screen.getByRole("link", { name: /request access/i }));
+    await screen.findByText(/access requested on github/i);
+
+    fireEvent.click(screen.getByRole("button", { name: /close/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    openModal();
+    await screen.findByText("devs-group");
+    expect(screen.queryByText(/access requested on github/i)).toBeNull();
+  });
 });
