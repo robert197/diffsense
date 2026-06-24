@@ -268,6 +268,43 @@ STORAGE_STATE=auth.json npx playwright test \
 
 ---
 
+## 4d. Pulls list sync
+
+The repo pulls page (`/repos/<owner>/<repo>/pulls`) keeps its open-PR list **synced**
+while the reviewer has it open. The server does the first paint; `PullsList.tsx` (a
+client island) then re-fetches through the `loadOpenPullRequests` server action — so
+only the PR array crosses the wire, not a whole page re-render. It **refreshes on tab
+refocus** (throttled, so rapid tab toggles don't storm GitHub), exposes a manual
+**Refresh** button + a "Synced …" freshness status, and flags PRs that are **New** or
+**Updated** since the last sync. Merged/closed PRs simply drop out.
+
+Drive it against a repo with private PRs (default `devs-group/core-gent`) with
+agent-browser on Arc:
+
+```bash
+OWNER=devs-group REPO=core-gent .claude/skills/diffsense-e2e/scripts/arc-drive-pulls-sync.sh
+```
+
+It asserts: the pulls page renders for the repo; the open-PR list shows (rows **or**
+the empty state — both valid); the "Synced …" status and the Refresh affordance are
+present; a manual Refresh re-syncs **in place** (a `window` tag survives the click, so
+no full-page reload); and the list stays healthy after a simulated tab refocus. A repo
+with zero open PRs surfaces a guiding **note** rather than a hard fail.
+
+The same flow runs headlessly in Playwright via `pulls-sync.spec.ts`:
+
+```bash
+OWNER=devs-group REPO=core-gent STORAGE_STATE=auth.json npx playwright test \
+  -c .claude/skills/diffsense-e2e/playwright/playwright.config.ts \
+  --project=desktop-authed pulls-sync.spec.ts
+```
+
+It strictly asserts the structure (header, list-or-empty, synced status, Refresh) and
+the no-full-reload contract; PR contents are not asserted, since the open-PR set
+changes over time.
+
+---
+
 ## 5. Generate real findings (on-demand `POST /decks`)
 
 Findings only exist after the pipeline runs. Trigger it:
