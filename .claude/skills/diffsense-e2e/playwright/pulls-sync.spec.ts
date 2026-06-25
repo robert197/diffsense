@@ -52,7 +52,8 @@ test.describe("diffsense pulls-list sync", () => {
       .poll(
         () =>
           page.evaluate(
-            () => (window as unknown as { __diffsenseNoReload?: boolean }).__diffsenseNoReload === true,
+            () =>
+              (window as unknown as { __diffsenseNoReload?: boolean }).__diffsenseNoReload === true,
           ),
         { timeout: 10_000 },
       )
