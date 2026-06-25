@@ -38,7 +38,10 @@ describe("loadOpenPullRequests", () => {
 
   it("returns the open PRs for an authed session, owner/repo passed through", async () => {
     const listOpenPullRequests = vi.fn(async () => [pull({ number: 7 })]);
-    getSession.mockResolvedValue({ github: fakeClient({ listOpenPullRequests }), login: "octocat" });
+    getSession.mockResolvedValue({
+      github: fakeClient({ listOpenPullRequests }),
+      login: "octocat",
+    });
 
     const result = await loadOpenPullRequests("acme", "web");
     if ("error" in result) throw new Error("expected pulls");
@@ -68,9 +71,14 @@ describe("loadOpenPullRequests", () => {
 
   it("does not call GitHub for a blank owner or repo", async () => {
     const listOpenPullRequests = vi.fn(async () => []);
-    getSession.mockResolvedValue({ github: fakeClient({ listOpenPullRequests }), login: "octocat" });
+    getSession.mockResolvedValue({
+      github: fakeClient({ listOpenPullRequests }),
+      login: "octocat",
+    });
     expect(await loadOpenPullRequests("", "web")).toEqual({ pulls: [] });
     expect(await loadOpenPullRequests("acme", "  ")).toEqual({ pulls: [] });
     expect(listOpenPullRequests).not.toHaveBeenCalled();
+    // The blank guard short-circuits before the session read — no wasted round-trip.
+    expect(getSession).not.toHaveBeenCalled();
   });
 });

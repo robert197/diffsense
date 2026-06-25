@@ -43,6 +43,20 @@ function diffChanges(prev: PullRequest[], next: PullRequest[]): Map<number, "new
   return changes;
 }
 
+/** Whether two synced lists are display-identical — order is deterministic (updated desc). */
+function samePulls(a: PullRequest[], b: PullRequest[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every(
+      (p, i) =>
+        p.number === b[i].number &&
+        p.updatedAt === b[i].updatedAt &&
+        p.title === b[i].title &&
+        p.draft === b[i].draft,
+    )
+  );
+}
+
 export function PullsList({
   owner,
   repo,
@@ -62,13 +76,16 @@ export function PullsList({
   // Guards mirroring AddRepositoriesModal: `loadingRef` drops a concurrent load;
   // `genRef` (bumped on unmount) invalidates an in-flight load so a late response
   // never writes onto an unmounted island; `mountedRef` is the same guard for the
-  // router redirect. `pullsRef`/`lastSyncedRef` mirror state so the sync callback and
-  // the refocus handler read current values without re-subscribing on every render.
+  // router redirect. `pullsRef`/`changedRef`/`lastSyncedRef` mirror state so the sync
+  // callback and the refocus handler read current values without re-subscribing on
+  // every render.
   const loadingRef = useRef(false);
   const genRef = useRef(0);
   const mountedRef = useRef(true);
   const pullsRef = useRef(pulls);
   pullsRef.current = pulls;
+  const changedRef = useRef(changed);
+  changedRef.current = changed;
   const lastSyncedRef = useRef(lastSynced);
   lastSyncedRef.current = lastSynced;
 
@@ -86,11 +103,18 @@ export function PullsList({
       }
       if ("error" in result) {
         // Sign-in expired mid-session — route to re-auth rather than show a broken list.
+        // Clear the syncing status first so the spinner doesn't hang for the whole
+        // (async) client navigation to /login.
+        setStatus("idle");
         router.push("/login");
         return;
       }
-      setChanged(diffChanges(pullsRef.current, result.pulls));
-      setPulls(result.pulls);
+      // A quiet sync (list unchanged, no markers left to clear) only bumps freshness —
+      // skip the list/marker writes so the rows don't re-render for nothing.
+      if (!samePulls(pullsRef.current, result.pulls) || changedRef.current.size > 0) {
+        setChanged(diffChanges(pullsRef.current, result.pulls));
+        setPulls(result.pulls);
+      }
       const now = Date.now();
       lastSyncedRef.current = now;
       setLastSynced(now);

@@ -87,6 +87,53 @@ describe("PullsList", () => {
     expect(loadOpenPullRequests).not.toHaveBeenCalled();
   });
 
+  it("pins the throttle boundary: blocked just under, allowed at the interval (strict <)", async () => {
+    loadOpenPullRequests.mockResolvedValue({ pulls: [] });
+    renderList([pull()]);
+
+    now += 9_999; // one ms under MIN_REFOCUS_INTERVAL_MS — still blocked (diff < interval)
+    fireFocus();
+    expect(loadOpenPullRequests).not.toHaveBeenCalled();
+
+    now += 1; // exactly at the interval — the guard's `< interval` is now false → allowed
+    fireFocus();
+    await waitFor(() => expect(loadOpenPullRequests).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not refetch on refocus while the tab is hidden", () => {
+    loadOpenPullRequests.mockResolvedValue({ pulls: [] });
+    renderList([pull()]);
+    now += 11_000; // past the throttle, so only the visibility guard can block it
+    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+    fireEvent(document, new Event("visibilitychange"));
+    expect(loadOpenPullRequests).not.toHaveBeenCalled();
+  });
+
+  it("drops a merged/closed PR that is no longer in the synced list", async () => {
+    loadOpenPullRequests.mockResolvedValue({ pulls: [pull({ number: 1, title: "Stays open" })] });
+    renderList([
+      pull({ number: 1, title: "Stays open" }),
+      pull({ number: 2, title: "Got merged" }),
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+
+    await waitFor(() => expect(screen.queryByText("Got merged")).toBeNull());
+    expect(screen.getByText("Stays open")).toBeTruthy();
+    expect(screen.getByText("1 open pull request")).toBeTruthy();
+  });
+
+  it("shows the error status (and keeps the list) when a sync throws", async () => {
+    loadOpenPullRequests.mockRejectedValue(new Error("transient 500"));
+    renderList([pull({ number: 1, title: "Still here" })]);
+
+    fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+
+    await waitFor(() => expect(screen.getByText(/couldn't sync/i)).toBeTruthy());
+    expect(screen.getByText("Still here")).toBeTruthy(); // list preserved
+    expect(push).not.toHaveBeenCalled(); // a thrown error is not a reauth redirect
+  });
+
   it("always syncs on a manual Refresh click, bypassing the throttle", async () => {
     loadOpenPullRequests.mockResolvedValue({ pulls: [pull({ number: 5, title: "Synced" })] });
     renderList([pull({ number: 1, title: "Before" })]);
