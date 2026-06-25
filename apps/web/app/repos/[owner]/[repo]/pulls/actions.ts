@@ -15,10 +15,7 @@ import { GitHubAuthError, type PullRequest } from "../../../../../lib/github";
  */
 export type LoadPullsResult = { pulls: PullRequest[] } | { error: "reauth" };
 
-export async function loadOpenPullRequests(
-  owner: string,
-  repo: string,
-): Promise<LoadPullsResult> {
+export async function loadOpenPullRequests(owner: string, repo: string): Promise<LoadPullsResult> {
   if (!owner.trim() || !repo.trim()) {
     // A blank target can't address a repo — treat it as nothing to sync rather than
     // sending an empty path to GitHub.
