@@ -118,6 +118,23 @@ export function buildReviewPrompt(chunk: ReviewChunk): string {
   ].join("\n");
 }
 
+/**
+ * Second-phase prompt for providers that can't combine tools with a JSON response
+ * schema in one call (Google): the tool loop already inspected the change and wrote
+ * the review as prose; this tool-free call coerces that prose into the ChunkReview
+ * schema. Providers that accept tools + structured output together never use it.
+ */
+export function buildStructuredReviewPrompt(chunk: ReviewChunk, review: string): string {
+  return [
+    buildReviewPrompt(chunk),
+    "",
+    "Your review notes from inspecting the change with the tools:",
+    review.trim() ? review : "(no additional notes — base the review on the diff above)",
+    "",
+    "Now return the structured review for this change.",
+  ].join("\n");
+}
+
 /** System prompt: the adversarial verifier, prompted to refute (issue #9, §3). */
 export const VERIFY_SYSTEM_PROMPT = `You are an independent verifier. A first reviewer flagged a risk in one changed chunk of a pull request. Your job is to refute it.
 
@@ -306,6 +323,30 @@ export function createReviewProvider(env: NodeJS.ProcessEnv = process.env): LLMP
           }),
         ]),
       );
+
+      // Google's API rejects function-calling combined with a JSON response schema
+      // in one request ("Function calling with a response mime type
+      // 'application/json' is unsupported"). Split the two for Google: run the
+      // bounded tool loop to gather context as prose, then a second tool-free
+      // structured call coerces that prose into a ChunkReview. Anthropic and OpenAI
+      // accept tools + structured output in one call, so they keep the single
+      // round-trip (no extra latency or cost for them).
+      if (config.provider === "google") {
+        const { text } = await generateText({
+          model: model(modelId),
+          system: REVIEW_SYSTEM_PROMPT,
+          prompt: buildReviewPrompt(request.chunk),
+          tools,
+          stopWhen: stepCountIs(REVIEW_STEP_BUDGET),
+        });
+        const { output } = await generateText({
+          model: model(modelId),
+          system: REVIEW_SYSTEM_PROMPT,
+          prompt: buildStructuredReviewPrompt(request.chunk, text),
+          output: Output.object({ schema: ChunkReviewSchema }),
+        });
+        return output;
+      }
 
       const { output } = await generateText({
         model: model(modelId),
