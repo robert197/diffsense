@@ -65,7 +65,10 @@ test.describe("diffsense add-repositories flow", () => {
 
     const target = dialog.getByRole("link", { name: /install|request access/i }).first();
     const hasTarget = await target.count();
-    test.skip(hasTarget === 0, "no installable targets in this session (every account already synced)");
+    test.skip(
+      hasTarget === 0,
+      "no installable targets in this session (every account already synced)",
+    );
 
     // The link opens GitHub in a new tab; don't follow it — just assert the
     // in-modal feedback so the reviewer knows to refresh on return.

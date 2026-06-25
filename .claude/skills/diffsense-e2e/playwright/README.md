@@ -34,6 +34,10 @@ STORAGE_STATE=auth.json npx playwright test -c playwright.config.ts \
 ORG=devs-group STORAGE_STATE=auth.json npx playwright test -c playwright.config.ts \
   --project=desktop-authed add-repos.spec.ts
 
+# just the pulls-list sync flow (see SKILL.md §4d):
+OWNER=devs-group REPO=core-gent STORAGE_STATE=auth.json npx playwright test -c playwright.config.ts \
+  --project=desktop-authed pulls-sync.spec.ts
+
 # assert findings render (process a PR first via ../scripts/trigger-deck.sh):
 PROCESSED_PR=38 EMPTY_PR=37 STORAGE_STATE=auth.json \
   npx playwright test -c playwright.config.ts --project=mobile-authed

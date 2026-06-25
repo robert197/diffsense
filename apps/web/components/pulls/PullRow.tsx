@@ -3,15 +3,22 @@ import type { PullRequest } from "../../lib/github";
 import { relativeTime } from "../../lib/ui";
 import { Badge } from "../ui/badge";
 
-/** A tappable open-PR row → its review entry point. Shared by the PR list and harness. */
+/**
+ * A tappable open-PR row → its review entry point. Shared by the PR list and harness.
+ * `change` is a transient sync marker (set by `PullsList` when a refresh surfaces a PR
+ * that's new or whose `updatedAt` advanced) so the reviewer sees *what* changed, not
+ * just that something did; it clears on the next sync.
+ */
 export function PullRow({
   owner,
   repo,
   pull,
+  change,
 }: {
   owner: string;
   repo: string;
   pull: PullRequest;
+  change?: "new" | "updated";
 }) {
   return (
     <a
@@ -22,6 +29,8 @@ export function PullRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="truncate font-medium">{pull.title}</span>
+          {change === "new" && <Badge variant="primary">New</Badge>}
+          {change === "updated" && <Badge variant="warning">Updated</Badge>}
           {pull.draft && <Badge variant="outline">Draft</Badge>}
         </div>
         <p className="mt-0.5 truncate text-xs text-muted-foreground">
