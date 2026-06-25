@@ -6,6 +6,7 @@ import {
   buildLocalizePrompt,
   buildReviewPrompt,
   buildScopePrompt,
+  buildStructuredReviewPrompt,
   buildSynthesisPrompt,
   buildVerifyPrompt,
   createReviewProvider,
@@ -71,6 +72,24 @@ describe("buildReviewPrompt", () => {
     const prompt = buildReviewPrompt({ file: "src/auth.ts", tier: "High", patch: "+const t = 1;" });
     expect(prompt).toContain("File: src/auth.ts");
     expect(prompt).toContain("tier: High");
+    expect(prompt).toContain("+const t = 1;");
+  });
+});
+
+describe("buildStructuredReviewPrompt", () => {
+  const chunk = { file: "src/auth.ts", tier: "High" as const, patch: "+const t = 1;" };
+
+  it("carries the diff and the tool-loop notes into the structuring call", () => {
+    const prompt = buildStructuredReviewPrompt(chunk, "Looks risky: unbounded input.");
+    expect(prompt).toContain("File: src/auth.ts");
+    expect(prompt).toContain("+const t = 1;");
+    expect(prompt).toContain("Looks risky: unbounded input.");
+    expect(prompt).toContain("structured review");
+  });
+
+  it("degrades to a diff-only instruction when the notes are empty", () => {
+    const prompt = buildStructuredReviewPrompt(chunk, "   ");
+    expect(prompt).toContain("no additional notes");
     expect(prompt).toContain("+const t = 1;");
   });
 });
